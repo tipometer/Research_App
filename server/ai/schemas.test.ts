@@ -94,14 +94,18 @@ describe("SynthesisSchema", () => {
       verdictReason: "x".repeat(100),
     })).toThrow();
   });
-  it("rejects score out of 0-10 range", () => {
-    expect(() => SynthesisSchema.parse({
+  it("accepts scores outside 0-10 — range enforced by prompt + post-parse clamp, not schema", () => {
+    // Anthropic's structured output doesn't support minimum/maximum on number types,
+    // so the schema itself is permissive. Range is enforced by the synthesis prompt
+    // and clamped post-parse in runPhase4Stream.
+    const result = SynthesisSchema.parse({
       verdict: "GO",
       synthesisScore: 7.5,
       scores: { marketSize: 11, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
       reportMarkdown: "x".repeat(4500),
       verdictReason: "x".repeat(100),
-    })).toThrow();
+    });
+    expect(result.scores.marketSize).toBe(11);
   });
   it("rejects invalid verdict", () => {
     expect(() => SynthesisSchema.parse({

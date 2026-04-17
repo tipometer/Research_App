@@ -33,15 +33,18 @@ export const DeepDivesSchema = z.object({
 });
 export type DeepDivesOutput = z.infer<typeof DeepDivesSchema>;
 
+// NOTE: number fields intentionally have no .min/.max — Anthropic's structured
+// output rejects `minimum`/`maximum` JSON Schema properties for `number` types.
+// Range (0-10) is enforced by the prompt and clamped post-parse in pipeline-phases.ts.
 export const SynthesisSchema = z.object({
   verdict: z.enum(["GO", "KILL", "CONDITIONAL"]),
-  synthesisScore: z.number().min(0).max(10),
+  synthesisScore: z.number(),
   scores: z.object({
-    marketSize:   z.number().min(0).max(10),
-    competition:  z.number().min(0).max(10),
-    feasibility:  z.number().min(0).max(10),
-    monetization: z.number().min(0).max(10),
-    timeliness:   z.number().min(0).max(10),
+    marketSize:   z.number(),
+    competition:  z.number(),
+    feasibility:  z.number(),
+    monetization: z.number(),
+    timeliness:   z.number(),
   }),
   reportMarkdown: z.string().min(4000),
   verdictReason: z.string().min(50).max(500),

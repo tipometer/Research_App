@@ -237,7 +237,21 @@ Return JSON with:
   // Use the stream's final output promise — resolves to the fully-validated
   // structured object only after the stream completes successfully (v6 API).
   const final = await streamResult.output;
-  return SynthesisSchema.parse(final);
+  const parsed = SynthesisSchema.parse(final);
+  // Clamp numeric scores to 0-10 range — the schema can't enforce this because
+  // Anthropic's structured output rejects minimum/maximum on number types.
+  const clamp = (v: number) => Math.max(0, Math.min(10, v));
+  return {
+    ...parsed,
+    synthesisScore: clamp(parsed.synthesisScore),
+    scores: {
+      marketSize:   clamp(parsed.scores.marketSize),
+      competition:  clamp(parsed.scores.competition),
+      feasibility:  clamp(parsed.scores.feasibility),
+      monetization: clamp(parsed.scores.monetization),
+      timeliness:   clamp(parsed.scores.timeliness),
+    },
+  };
 }
 
 /**
