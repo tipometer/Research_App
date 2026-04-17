@@ -124,3 +124,113 @@ describe("runPhase3 (Deep Dives)", () => {
     expect(result.sources).toEqual([]);
   });
 });
+
+import { runPhase4Stream, runPolling, runBrainstorm } from "./pipeline-phases";
+
+vi.mock("ai", async (orig) => {
+  const actual = await orig<typeof import("ai")>();
+  return {
+    ...actual,
+    generateText: vi.fn(),
+    streamText: vi.fn(),
+  };
+});
+
+import { streamText } from "ai";
+
+describe("runPhase4Stream (Synthesis)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("yields partial objects via onPartial callback and returns final", async () => {
+    const partials: any[] = [];
+    const finalObj = {
+      verdict: "GO",
+      synthesisScore: 7.5,
+      scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
+      reportMarkdown: "x".repeat(4500),
+      verdictReason: "reasonable".repeat(10),
+    };
+    // Simulate a progressive stream ending with the final full object
+    async function* mockPartials() {
+      yield { verdict: "GO" };
+      yield { verdict: "GO", synthesisScore: 7.5 };
+      yield finalObj;
+    }
+    (streamText as any).mockReturnValue({ partialOutputStream: mockPartials() });
+    (resolvePhase as any).mockResolvedValue({
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      client: (_name: string) => ({}),
+    });
+
+    const collected: any[] = [];
+    const final = await runPhase4Stream({ nicheName: "X", context: "ctx" }, (p) => collected.push(p));
+    expect(collected).toHaveLength(3);
+    expect(final.verdict).toBe("GO");
+    expect(final.reportMarkdown.length).toBeGreaterThan(4000);
+  });
+
+  it("throws when final partial is invalid", async () => {
+    async function* mockPartials() {
+      yield { verdict: "GO" };
+      yield { verdict: "GO", synthesisScore: "not a number" } as any;
+    }
+    (streamText as any).mockReturnValue({ partialOutputStream: mockPartials() });
+    (resolvePhase as any).mockResolvedValue({
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      client: (_n: string) => ({}),
+    });
+    await expect(
+      runPhase4Stream({ nicheName: "X", context: "ctx" }, () => {})
+    ).rejects.toThrow();
+  });
+});
+
+describe("runPolling", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns validated questions", async () => {
+    const mockQuestions = {
+      questions: [
+        { id: "q1", type: "single_choice", text: "Q1?", options: ["a", "b"] },
+        { id: "q2", type: "likert", text: "Q2?" },
+        { id: "q3", type: "short_text", text: "Q3?" },
+      ],
+    };
+    (generateText as any).mockResolvedValue({ output: mockQuestions });
+    (resolvePhase as any).mockResolvedValue({
+      model: "gpt-4.1-mini",
+      provider: "openai",
+      client: (_n: string) => ({}),
+    });
+
+    const result = await runPolling({ nicheName: "X", report: "some report" });
+    expect(result.questions).toHaveLength(3);
+    expect(result.questions[0].type).toBe("single_choice");
+  });
+});
+
+describe("runBrainstorm", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns exactly 10 validated ideas", async () => {
+    const mockIdeas = {
+      ideas: Array(10).fill(null).map((_, i) => ({
+        id: `idea-${i}`,
+        title: `Idea ${i}`,
+        description: `Short description ${i}`,
+      })),
+    };
+    (generateText as any).mockResolvedValue({ output: mockIdeas });
+    (resolvePhase as any).mockResolvedValue({
+      model: "gpt-4.1-mini",
+      provider: "openai",
+      client: (_n: string) => ({}),
+    });
+
+    const result = await runBrainstorm({ context: "AI tools for HR" });
+    expect(result.ideas).toHaveLength(10);
+    expect(result.ideas[0].id).toBe("idea-0");
+  });
+});

@@ -1,4 +1,4 @@
-import { generateText, Output, type ModelMessage } from "ai";
+import { generateText, streamText, Output, type ModelMessage } from "ai";
 import { google } from "@ai-sdk/google";
 import { z } from "zod";
 import { resolvePhase, type Phase } from "./router";
@@ -7,6 +7,9 @@ import {
   WideScanSchema, type WideScanOutput,
   GapDetectionSchema, type GapDetectionOutput,
   DeepDivesSchema, type DeepDivesOutput,
+  SynthesisSchema, type SynthesisOutput,
+  PollingSchema, type PollingOutput,
+  BrainstormSchema, type BrainstormOutput,
 } from "./schemas";
 
 const RETRY_RESERVED_MS = 30_000;
@@ -146,4 +149,113 @@ Return JSON with:
 - summary: 2-3 sentence summary`,
     },
   ], options);
+}
+
+/**
+ * Phase 4 — Synthesis with progressive streaming via `streamText` + `output`.
+ * In v6, the last partial emitted from `partialOutputStream` equals the complete
+ * validated object (once the stream finishes successfully).
+ * No retry in C1 — streaming retry is C2 scope.
+ */
+export async function runPhase4Stream(
+  input: { nicheName: string; context: string },
+  onPartial: (partial: Partial<SynthesisOutput>) => void,
+  options: { abortSignal?: AbortSignal } = {},
+): Promise<SynthesisOutput> {
+  const { model, client } = await resolvePhase("synthesis");
+
+  const { partialOutputStream } = streamText({
+    model: client(model),
+    output: Output.object({ schema: SynthesisSchema }),
+    messages: [
+      {
+        role: "system",
+        content: "You are a senior market research analyst. Synthesize all findings into a comprehensive report.",
+      },
+      {
+        role: "user",
+        content: `Synthesize research findings for "${input.nicheName}" and produce a final verdict.
+
+Findings context:
+${input.context}
+
+Return JSON with:
+- verdict: "GO" | "KILL" | "CONDITIONAL"
+- synthesisScore: 0-10 (one decimal)
+- scores: { marketSize, competition, feasibility, monetization, timeliness } all 0-10
+- reportMarkdown: full markdown report MIN 800 WORDS (~4000+ characters) with sections:
+  ## Összefoglalás, ## Piaci Lehetőség, ## Versenyhelyzet, ## Megvalósíthatóság, ## Monetizáció, ## Időszerűség, ## Következő Lépések, ## Validációs Kérdések
+- verdictReason: 2-3 sentence explanation`,
+      },
+    ],
+    abortSignal: options.abortSignal,
+  });
+
+  let lastPartial: Partial<SynthesisOutput> = {};
+  for await (const partial of partialOutputStream) {
+    lastPartial = partial as Partial<SynthesisOutput>;
+    onPartial(lastPartial);
+  }
+  return SynthesisSchema.parse(lastPartial);
+}
+
+/**
+ * Polling — generate 3-5 survey questions from a completed research report.
+ * Non-grounded (no web search needed). No retry in C1.
+ */
+export async function runPolling(
+  input: { nicheName: string; report: string },
+  options: { abortSignal?: AbortSignal } = {},
+): Promise<PollingOutput> {
+  const { model, client } = await resolvePhase("polling");
+  const { output } = await generateText({
+    model: client(model),
+    output: Output.object({ schema: PollingSchema }),
+    messages: [
+      {
+        role: "system",
+        content: "You generate targeted survey questions for market research validation.",
+      },
+      {
+        role: "user",
+        content: `Given this research report for "${input.nicheName}":
+${input.report.substring(0, 2000)}
+
+Generate 3-5 focused questions to validate the most critical market unknowns (e.g. pricing willingness, feature preferences). Mix question types: single_choice (with options), multiple_choice (with options), likert, short_text.
+
+Return JSON: { questions: [{ id, type, text, options? }] }`,
+      },
+    ],
+    abortSignal: options.abortSignal,
+  });
+  return PollingSchema.parse(output);
+}
+
+/**
+ * Brainstorm — generate exactly 10 niche business ideas.
+ * Non-grounded. No retry in C1.
+ */
+export async function runBrainstorm(
+  input: { context: string },
+  options: { abortSignal?: AbortSignal } = {},
+): Promise<BrainstormOutput> {
+  const { model, client } = await resolvePhase("brainstorm");
+  const { output } = await generateText({
+    model: client(model),
+    output: Output.object({ schema: BrainstormSchema }),
+    messages: [
+      {
+        role: "system",
+        content: "You are a creative market niche ideator. Generate diverse, specific, non-obvious business ideas.",
+      },
+      {
+        role: "user",
+        content: `Context: ${input.context}
+
+Generate EXACTLY 10 niche business ideas. Each with: id (kebab-case unique), title (concise), description (max 300 chars, specific target audience + value prop).`,
+      },
+    ],
+    abortSignal: options.abortSignal,
+  });
+  return BrainstormSchema.parse(output);
 }
