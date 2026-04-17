@@ -5,6 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod/v4";
 import {
+  getDb,
   getResearches,
   getResearchById,
   createResearch,
@@ -24,7 +25,11 @@ import {
   getSurveyByResearchId,
   createSurvey,
 } from "./db";
-import { invokeLLM } from "./_core/llm";
+import { runBrainstorm, runPolling } from "./ai/pipeline-phases";
+import { getProvider, type ProviderId } from "./ai/providers";
+import { eq } from "drizzle-orm";
+import { aiConfigs, modelRouting } from "../drizzle/schema";
+import { generateText } from "ai";
 import { nanoid } from "nanoid";
 
 // ─── Admin procedure ──────────────────────────────────────────────────────────
@@ -150,49 +155,20 @@ export const appRouter = router({
         const credits = await getUserCredits(ctx.user.id);
         if (credits < 1) throw new TRPCError({ code: "PAYMENT_REQUIRED", message: "Insufficient credits" });
 
-        const prompt = `You are a market research expert. Generate exactly 10 niche business ideas based on this context: "${input.context}"${input.refinement ? `. Refinement: ${input.refinement}` : ""}.
-        
-Return a JSON array of 10 objects with fields: id (1-10), title (string, max 50 chars), description (string, max 150 chars), score (number 1-10, one decimal).
-Be creative, specific, and commercially viable.`;
+        const context = input.context + (input.refinement ? `\nRefinement: ${input.refinement}` : "");
 
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: "You are a market research expert. Always respond with valid JSON only." },
-            { role: "user", content: prompt },
-          ],
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "brainstorm_ideas",
-              strict: true,
-              schema: {
-                type: "object",
-                properties: {
-                  ideas: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        id: { type: "integer" },
-                        title: { type: "string" },
-                        description: { type: "string" },
-                        score: { type: "number" },
-                      },
-                      required: ["id", "title", "description", "score"],
-                      additionalProperties: false,
-                    },
-                  },
-                },
-                required: ["ideas"],
-                additionalProperties: false,
-              },
-            },
-          },
-        });
-
-        const content = response.choices?.[0]?.message?.content ?? "{}";
-        const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
-        const ideas = parsed.ideas ?? [];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(new Error("Brainstorm timeout")), 60_000);
+        let ideas: Awaited<ReturnType<typeof runBrainstorm>>["ideas"];
+        try {
+          const result = await runBrainstorm(
+            { context },
+            { abortSignal: controller.signal },
+          );
+          ideas = result.ideas;
+        } finally {
+          clearTimeout(timeout);
+        }
 
         // Save session
         await createBrainstormSession(ctx.user.id, input.context, ideas);
@@ -228,23 +204,20 @@ Be creative, specific, and commercially viable.`;
         if (research.status !== "done") throw new TRPCError({ code: "BAD_REQUEST", message: "Research must be completed first" });
 
         // Generate survey questions via AI
-        const prompt = `Based on this business niche: "${research.nicheName}", generate 4 validation survey questions.
-Return JSON with fields: questions (array of { id, type ("radio"|"scale"|"text"), text, options (array of strings, only for radio/scale) })`;
-
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: "You are a market research expert. Return valid JSON only." },
-            { role: "user", content: prompt },
-          ],
-        });
-
-        const content = response.choices?.[0]?.message?.content ?? "{}";
-        let questions;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(new Error("Polling timeout")), 60_000);
+        let questions: Awaited<ReturnType<typeof runPolling>>["questions"];
         try {
-          const parsed = JSON.parse(typeof content === "string" ? content : "{}");
-          questions = parsed.questions ?? [];
-        } catch {
-          questions = [];
+          const result = await runPolling(
+            {
+              nicheName: research.nicheName,
+              report: research.reportMarkdown ?? "",
+            },
+            { abortSignal: controller.signal },
+          );
+          questions = result.questions;
+        } finally {
+          clearTimeout(timeout);
         }
 
         const token = nanoid(32);
@@ -288,6 +261,120 @@ Return JSON with fields: questions (array of { id, type ("radio"|"scale"|"text")
         await logAudit(ctx.user.id, "admin.adjust_credits", { targetUserId: input.userId, amount: input.amount }, ctx.req);
         return { success: true };
       }),
+
+    // ─── AI Config ───────────────────────────────────────────────────────────
+    ai: router({
+      listConfigs: adminProcedure.query(async () => {
+        const db = await getDb();
+        if (!db) return [];
+        const rows = await db.select().from(aiConfigs);
+        // NEVER return apiKey — only masked presence flag
+        return rows.map(r => ({
+          provider: r.provider,
+          hasKey: !!r.apiKey && r.apiKey.length > 0,
+          isActive: r.isActive,
+          updatedAt: r.updatedAt,
+        }));
+      }),
+
+      setProviderKey: adminProcedure
+        .input(z.object({
+          provider: z.enum(["openai", "anthropic", "gemini"]),
+          apiKey: z.string().min(10),
+          isActive: z.boolean().default(true),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "No DB" });
+          const existing = await db.select().from(aiConfigs).where(eq(aiConfigs.provider, input.provider)).limit(1);
+          if (existing.length > 0) {
+            await db.update(aiConfigs)
+              .set({ apiKey: input.apiKey, isActive: input.isActive })
+              .where(eq(aiConfigs.provider, input.provider));
+          } else {
+            await db.insert(aiConfigs).values({
+              provider: input.provider,
+              apiKey: input.apiKey,
+              isActive: input.isActive,
+            });
+          }
+          await logAudit(
+            ctx.user.id,
+            "admin.ai.setProviderKey",
+            { provider: input.provider, isActive: input.isActive },
+            ctx.req,
+          );
+          return { success: true };
+        }),
+
+      testProvider: adminProcedure
+        .input(z.object({
+          provider: z.enum(["openai", "anthropic", "gemini"]),
+        }))
+        .mutation(async ({ input }) => {
+          const db = await getDb();
+          if (!db) return { ok: false, error: "No DB connection" };
+          const rows = await db.select().from(aiConfigs).where(eq(aiConfigs.provider, input.provider)).limit(1);
+          const apiKey = rows[0]?.apiKey;
+          if (!apiKey) return { ok: false, error: "No API key set" };
+
+          try {
+            const client = getProvider(input.provider as ProviderId, apiKey);
+            const defaultModel =
+              input.provider === "openai"    ? "gpt-4.1-mini" :
+              input.provider === "anthropic" ? "claude-sonnet-4-6" :
+                                               "gemini-2.5-flash";
+            await generateText({
+              model: client(defaultModel),
+              messages: [{ role: "user", content: "Reply with exactly one word: OK" }],
+            });
+            return { ok: true };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { ok: false, error: message };
+          }
+        }),
+
+      listRouting: adminProcedure.query(async () => {
+        const db = await getDb();
+        if (!db) return [];
+        return db.select().from(modelRouting);
+      }),
+
+      updateRouting: adminProcedure
+        .input(z.object({
+          phase: z.enum(["wide_scan", "gap_detection", "deep_dives", "synthesis", "polling", "brainstorm"]),
+          primaryModel: z.string().min(3),
+          fallbackModel: z.string().optional(),
+          systemPrompt: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "No DB" });
+          const existing = await db.select().from(modelRouting).where(eq(modelRouting.phase, input.phase)).limit(1);
+          if (existing.length > 0) {
+            await db.update(modelRouting).set({
+              primaryModel: input.primaryModel,
+              fallbackModel: input.fallbackModel ?? null,
+              systemPrompt: input.systemPrompt ?? existing[0]!.systemPrompt,
+            }).where(eq(modelRouting.phase, input.phase));
+          } else {
+            await db.insert(modelRouting).values({
+              phase: input.phase,
+              primaryModel: input.primaryModel,
+              fallbackModel: input.fallbackModel,
+              systemPrompt: input.systemPrompt,
+            });
+          }
+          await logAudit(
+            ctx.user.id,
+            "admin.ai.updateRouting",
+            { phase: input.phase, primaryModel: input.primaryModel },
+            ctx.req,
+          );
+          return { success: true };
+        }),
+    }),
   }),
 });
 

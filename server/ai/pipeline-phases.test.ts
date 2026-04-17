@@ -1,0 +1,243 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("./router", () => ({
+  resolvePhase: vi.fn(),
+}));
+
+vi.mock("ai", async (orig) => {
+  const actual = await orig<typeof import("ai")>();
+  return { ...actual, generateText: vi.fn() };
+});
+
+import { runPhase1, runPhase2, runPhase3 } from "./pipeline-phases";
+import { resolvePhase } from "./router";
+import { generateText } from "ai";
+
+function mockResolvePhase() {
+  (resolvePhase as any).mockResolvedValue({
+    model: "gemini-2.5-flash",
+    provider: "gemini",
+    client: (_name: string) => ({ /* stub model object */ }),
+  });
+}
+
+describe("runPhase1 (Wide Scan)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns parsed output + extracted sources from groundingMetadata", async () => {
+    mockResolvePhase();
+    (generateText as any).mockResolvedValue({
+      text: JSON.stringify({ keywords: ["a", "b", "c"], summary: "x".repeat(60) }),
+      providerMetadata: {
+        google: {
+          groundingMetadata: {
+            groundingChunks: [{ web: { uri: "https://example.com", title: "Ex" } }],
+            groundingSupports: [],
+            webSearchQueries: [],
+          },
+        },
+      },
+    });
+    const result = await runPhase1({ nicheName: "AI tools", strategy: "gaps" });
+    expect(result.data.keywords).toHaveLength(3);
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].url).toBe("https://example.com");
+    expect(result.sources[0].publishedAt).toBeNull();
+  });
+
+  it("returns empty sources when no grounding metadata", async () => {
+    mockResolvePhase();
+    (generateText as any).mockResolvedValue({
+      text: JSON.stringify({ keywords: ["a", "b", "c"], summary: "x".repeat(60) }),
+      providerMetadata: {},
+    });
+    const result = await runPhase1({ nicheName: "X", strategy: "gaps" });
+    expect(result.sources).toEqual([]);
+  });
+
+  it("retries once on Zod validation error", async () => {
+    mockResolvePhase();
+    (generateText as any)
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ keywords: ["only-one"], summary: "too short" }), // fails min(3) and min(50)
+        providerMetadata: { google: { groundingMetadata: { groundingChunks: [], groundingSupports: [], webSearchQueries: [] } } },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ keywords: ["a", "b", "c"], summary: "x".repeat(60) }),
+        providerMetadata: { google: { groundingMetadata: { groundingChunks: [], groundingSupports: [], webSearchQueries: [] } } },
+      });
+    const result = await runPhase1({ nicheName: "X", strategy: "gaps" });
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(result.data.keywords).toHaveLength(3);
+  });
+});
+
+describe("runPhase2 (Gap Detection)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it("returns parsed gaps + competitors + sources", async () => {
+    mockResolvePhase();
+    (generateText as any).mockResolvedValue({
+      text: JSON.stringify({
+        gaps: [{ title: "g1", description: "d1" }, { title: "g2", description: "d2" }],
+        competitors: [{ name: "c1", weakness: "w1" }, { name: "c2", weakness: "w2" }],
+        summary: "x".repeat(60),
+      }),
+      providerMetadata: {
+        google: {
+          groundingMetadata: {
+            groundingChunks: [{ web: { uri: "https://stanford.edu/paper", title: "P" } }],
+            groundingSupports: [],
+            webSearchQueries: [],
+          },
+        },
+      },
+    });
+    const result = await runPhase2({ nicheName: "X", strategy: "gaps", phase1Summary: "summary" });
+    expect(result.data.gaps).toHaveLength(2);
+    expect(result.data.competitors).toHaveLength(2);
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].sourceType).toBe("academic"); // .edu
+  });
+});
+
+describe("runPhase3 (Deep Dives)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it("returns parsed monetization + challenges + sources", async () => {
+    mockResolvePhase();
+    (generateText as any).mockResolvedValue({
+      text: JSON.stringify({
+        monetizationModels: [
+          { name: "m1", description: "d1", revenueEstimate: null },
+          { name: "m2", description: "d2", revenueEstimate: "$10k" },
+        ],
+        technicalChallenges: [
+          { title: "t1", severity: "low" },
+          { title: "t2", severity: "high" },
+        ],
+        summary: "x".repeat(60),
+      }),
+      providerMetadata: {},
+    });
+    const result = await runPhase3({ nicheName: "X", strategy: "gaps", phase2Summary: "summary" });
+    expect(result.data.monetizationModels).toHaveLength(2);
+    expect(result.data.technicalChallenges).toHaveLength(2);
+    expect(result.sources).toEqual([]);
+  });
+});
+
+import { runPhase4Stream, runPolling, runBrainstorm } from "./pipeline-phases";
+
+vi.mock("ai", async (orig) => {
+  const actual = await orig<typeof import("ai")>();
+  return {
+    ...actual,
+    generateText: vi.fn(),
+    streamText: vi.fn(),
+  };
+});
+
+import { streamText } from "ai";
+
+describe("runPhase4Stream (Synthesis)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("yields partial objects via onPartial callback and returns final", async () => {
+    const partials: any[] = [];
+    const finalObj = {
+      verdict: "GO",
+      synthesisScore: 7.5,
+      scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
+      reportMarkdown: "x".repeat(4500),
+      verdictReason: "reasonable".repeat(10),
+    };
+    // Simulate a progressive stream with partials, and a resolved output promise
+    async function* mockPartials() {
+      yield { verdict: "GO" };
+      yield { verdict: "GO", synthesisScore: 7.5 };
+      yield finalObj;
+    }
+    (streamText as any).mockReturnValue({
+      partialOutputStream: mockPartials(),
+      output: Promise.resolve(finalObj),
+    });
+    (resolvePhase as any).mockResolvedValue({
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      client: (_name: string) => ({}),
+    });
+
+    const collected: any[] = [];
+    const final = await runPhase4Stream({ nicheName: "X", context: "ctx" }, (p) => collected.push(p));
+    expect(collected).toHaveLength(3);
+    expect(final.verdict).toBe("GO");
+    expect(final.reportMarkdown.length).toBeGreaterThan(4000);
+  });
+
+  it("throws when final output is invalid", async () => {
+    const invalidObj = { verdict: "GO", synthesisScore: "not a number" } as any;
+    async function* mockPartials() {
+      yield { verdict: "GO" };
+      yield invalidObj;
+    }
+    (streamText as any).mockReturnValue({
+      partialOutputStream: mockPartials(),
+      output: Promise.resolve(invalidObj),
+    });
+    (resolvePhase as any).mockResolvedValue({
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      client: (_n: string) => ({}),
+    });
+    await expect(
+      runPhase4Stream({ nicheName: "X", context: "ctx" }, () => {})
+    ).rejects.toThrow();
+  });
+});
+
+describe("runPolling", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns validated questions", async () => {
+    const mockQuestions = {
+      questions: [
+        { id: "q1", type: "single_choice", text: "Q1?", options: ["a", "b"] },
+        { id: "q2", type: "likert", text: "Q2?", options: null },
+        { id: "q3", type: "short_text", text: "Q3?", options: null },
+      ],
+    };
+    (generateText as any).mockResolvedValue({ output: mockQuestions });
+    (resolvePhase as any).mockResolvedValue({
+      model: "gpt-4.1-mini",
+      provider: "openai",
+      client: (_n: string) => ({}),
+    });
+
+    const result = await runPolling({ nicheName: "X", report: "some report" });
+    expect(result.questions).toHaveLength(3);
+    expect(result.questions[0].type).toBe("single_choice");
+  });
+});
+
+describe("runBrainstorm", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns exactly 10 validated ideas", async () => {
+    const mockIdeas = {
+      ideas: Array(10).fill(null).map((_, i) => ({
+        id: `idea-${i}`,
+        title: `Idea ${i}`,
+        description: `Short description ${i}`,
+      })),
+    };
+    (generateText as any).mockResolvedValue({ output: mockIdeas });
+    (resolvePhase as any).mockResolvedValue({
+      model: "gpt-4.1-mini",
+      provider: "openai",
+      client: (_n: string) => ({}),
+    });
+
+    const result = await runBrainstorm({ context: "AI tools for HR" });
+    expect(result.ideas).toHaveLength(10);
+    expect(result.ideas[0].id).toBe("idea-0");
+  });
+});

@@ -67,6 +67,15 @@ export const en = {
       duration: "Duration",
       failed: "Research failed. Credits have been refunded.",
       retry: "Retry",
+      error: {
+        title: "Research interrupted",
+        phase: "Phase",
+        refunded: "Credit automatically refunded",
+        retry: "Retry",
+      },
+      synthesis: {
+        streaming: "Report generating live...",
+      },
     },
     report: {
       verdict: {
@@ -94,6 +103,10 @@ export const en = {
         blog: "Blog",
         community: "Community",
       },
+      unknownDate: "Unknown date",
+      notFound: "Research not found",
+      notReady: "Research still running — check back later",
+      loading: "Loading report...",
       export: {
         pdf: "Download PDF",
         markdown: "Download Markdown",
@@ -140,6 +153,29 @@ export const en = {
       prompts: "Prompts",
       testConnection: "Test Connection",
       saveConfig: "Save Configuration",
+      ai: {
+        providersTab: "Providers",
+        routingTab: "Model Routing",
+        apiKeyPlaceholder: "API key…",
+        save: "Save",
+        testConnection: "Test Connection",
+        configured: "Configured",
+        notSet: "Not set",
+        keySaved: "API key saved",
+        testOk: "Connection successful",
+        testFail: "Connection failed",
+        primaryModel: "Primary Model",
+        fallbackModel: "Fallback Model",
+        routingSaved: "Routing updated",
+        phases: {
+          wide_scan: "Wide Scan",
+          gap_detection: "Gap Detection",
+          deep_dives: "Deep Dives",
+          synthesis: "Synthesis",
+          polling: "Polling",
+          brainstorm: "Brainstorm",
+        },
+      },
     },
     auth: {
       login: "Login",

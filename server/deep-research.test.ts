@@ -8,6 +8,104 @@ import { COOKIE_NAME } from "../shared/const";
 import type { TrpcContext } from "./_core/context";
 import type { User } from "../drizzle/schema";
 
+// ── Module Mocks ───────────────────────────────────────────────────────────
+// Pre-emptive mocks for the new ai/pipeline-phases helpers (Task 10 refactor).
+// When Task 10 lands and research-pipeline.ts switches to these functions,
+// the mocks take effect immediately and keep the 16 integration tests green.
+// The _core/llm mock (if any) is intentionally absent — current pipeline
+// doesn't use it directly from this test's module path.
+
+vi.mock("./ai/pipeline-phases", () => ({
+  runPhase1: vi.fn().mockResolvedValue({
+    data: {
+      keywords: ["ai", "research", "market"],
+      summary: "Mock wide scan summary of the market for the given niche.".padEnd(60, "."),
+    },
+    sources: [
+      {
+        url: "https://mock.example.com/a",
+        title: "Mock Source A",
+        snippet: "...",
+        sourceType: "blog",
+        publishedAt: null,
+      },
+    ],
+  }),
+  runPhase2: vi.fn().mockResolvedValue({
+    data: {
+      gaps: [
+        { title: "Gap 1", description: "desc 1" },
+        { title: "Gap 2", description: "desc 2" },
+      ],
+      competitors: [
+        { name: "Comp 1", weakness: "weak 1" },
+        { name: "Comp 2", weakness: "weak 2" },
+      ],
+      summary: "Mock gap detection summary of market structure.".padEnd(60, "."),
+    },
+    sources: [],
+  }),
+  runPhase3: vi.fn().mockResolvedValue({
+    data: {
+      monetizationModels: [
+        { name: "SaaS", description: "Monthly subscription" },
+        { name: "Freemium", description: "Free tier + paid upgrades" },
+      ],
+      technicalChallenges: [
+        { title: "Scaling", severity: "medium" as const },
+        { title: "Compliance", severity: "high" as const },
+      ],
+      summary: "Mock deep dives summary covering monetization and feasibility.".padEnd(60, "."),
+    },
+    sources: [],
+  }),
+  runPhase4Stream: vi.fn().mockImplementation(
+    async (_input: unknown, onPartial: (p: unknown) => void) => {
+      const final = {
+        verdict: "GO" as const,
+        synthesisScore: 7.5,
+        scores: {
+          marketSize: 8,
+          competition: 6,
+          feasibility: 7,
+          monetization: 7,
+          timeliness: 8,
+        },
+        reportMarkdown: "## Mock Report\n\n".padEnd(4500, "x"),
+        verdictReason: "Mock verdict reason for a strong GO signal.".padEnd(60, "."),
+      };
+      onPartial({ verdict: "GO" });
+      onPartial(final);
+      return final;
+    },
+  ),
+  runPolling: vi.fn().mockResolvedValue({
+    questions: [
+      { id: "q1", type: "single_choice" as const, text: "Q1?", options: ["a", "b"] },
+      { id: "q2", type: "likert" as const, text: "Q2?" },
+      { id: "q3", type: "short_text" as const, text: "Q3?" },
+    ],
+  }),
+  runBrainstorm: vi.fn().mockResolvedValue({
+    ideas: Array.from({ length: 10 }, (_, i) => ({
+      id: `idea-${i}`,
+      title: `Idea ${i}`,
+      description: `Mock idea ${i} description.`,
+    })),
+  }),
+}));
+
+vi.mock("./ai/router", () => ({
+  resolvePhase: vi.fn().mockResolvedValue({
+    model: "mock-model",
+    provider: "openai",
+    client: (_name: string) => ({}),
+  }),
+  detectProvider: vi.fn().mockReturnValue("openai"),
+  lookupModel: vi.fn().mockResolvedValue("mock-model"),
+  lookupApiKey: vi.fn().mockResolvedValue("sk-mock"),
+}));
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function makeUser(overrides: Partial<User> = {}): User {
@@ -92,10 +190,9 @@ describe("research.create", () => {
     const caller = appRouter.createCaller(makeContext(null));
     await expect(
       caller.research.create({
-        niche: "Test niche",
+        nicheName: "Test niche",
         description: "Test description",
-        strategy: "underserved_niches",
-        language: "hu",
+        strategy: "gaps",
       })
     ).rejects.toThrow();
   });
@@ -103,10 +200,10 @@ describe("research.create", () => {
 
 // ── Credit Tests ───────────────────────────────────────────────────────────
 
-describe("billing.getCredits", () => {
+describe("user.credits", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
-    await expect(caller.billing.getCredits()).rejects.toThrow();
+    await expect(caller.user.credits()).rejects.toThrow();
   });
 });
 
@@ -151,7 +248,7 @@ describe("brainstorm.generate", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
     await expect(
-      caller.brainstorm.generate({ context: "fitness apps", language: "hu" })
+      caller.brainstorm.generate({ context: "fitness apps for daily tracking" })
     ).rejects.toThrow();
   });
 });
@@ -163,10 +260,9 @@ describe("security: input validation", () => {
     const caller = appRouter.createCaller(makeContext(makeUser()));
     await expect(
       caller.research.create({
-        niche: "",
+        nicheName: "",
         description: "desc",
-        strategy: "underserved_niches",
-        language: "hu",
+        strategy: "gaps",
       })
     ).rejects.toThrow();
   });
@@ -175,10 +271,9 @@ describe("security: input validation", () => {
     const caller = appRouter.createCaller(makeContext(makeUser()));
     await expect(
       caller.research.create({
-        niche: "a".repeat(201),
+        nicheName: "a".repeat(257),
         description: "desc",
-        strategy: "underserved_niches",
-        language: "hu",
+        strategy: "gaps",
       })
     ).rejects.toThrow();
   });
@@ -194,16 +289,119 @@ describe("security: input validation", () => {
 
 // ── GDPR Tests ─────────────────────────────────────────────────────────────
 
-describe("user.getCredits", () => {
+describe("user.credits", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
-    await expect(caller.user.getCredits()).rejects.toThrow();
+    await expect(caller.user.credits()).rejects.toThrow();
   });
 });
 
-describe("user.getTransactions", () => {
+describe("user.transactions", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
-    await expect(caller.user.getTransactions()).rejects.toThrow();
+    await expect(caller.user.transactions()).rejects.toThrow();
+  });
+});
+
+// ── Admin AI Config Tests ──────────────────────────────────────────────────
+
+describe("admin.ai.listConfigs", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(caller.admin.ai.listConfigs()).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(caller.admin.ai.listConfigs()).rejects.toThrow();
+  });
+
+  it("returns empty array when no DB is available", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    // No DB in test environment — should return []
+    const result = await caller.admin.ai.listConfigs();
+    expect(result).toEqual([]);
+  });
+});
+
+describe("admin.ai.setProviderKey", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(
+      caller.admin.ai.setProviderKey({ provider: "openai", apiKey: "sk-test-key-12345", isActive: true })
+    ).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(
+      caller.admin.ai.setProviderKey({ provider: "openai", apiKey: "sk-test-key-12345", isActive: true })
+    ).rejects.toThrow();
+  });
+
+  it("rejects apiKey shorter than 10 characters", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    await expect(
+      caller.admin.ai.setProviderKey({ provider: "openai", apiKey: "short", isActive: true })
+    ).rejects.toThrow();
+  });
+});
+
+describe("admin.ai.testProvider", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(caller.admin.ai.testProvider({ provider: "openai" })).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(caller.admin.ai.testProvider({ provider: "openai" })).rejects.toThrow();
+  });
+
+  it("returns ok=false when no DB connection", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    const result = await caller.admin.ai.testProvider({ provider: "openai" });
+    expect(result).toMatchObject({ ok: false });
+  });
+});
+
+describe("admin.ai.listRouting", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(caller.admin.ai.listRouting()).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(caller.admin.ai.listRouting()).rejects.toThrow();
+  });
+
+  it("returns empty array when no DB is available", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    const result = await caller.admin.ai.listRouting();
+    expect(result).toEqual([]);
+  });
+});
+
+describe("admin.ai.updateRouting", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(
+      caller.admin.ai.updateRouting({ phase: "wide_scan", primaryModel: "gpt-4.1-mini" })
+    ).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(
+      caller.admin.ai.updateRouting({ phase: "wide_scan", primaryModel: "gpt-4.1-mini" })
+    ).rejects.toThrow();
+  });
+
+  it("rejects primaryModel shorter than 3 characters", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    await expect(
+      caller.admin.ai.updateRouting({ phase: "wide_scan", primaryModel: "gp" })
+    ).rejects.toThrow();
   });
 });

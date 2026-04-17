@@ -3,10 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslation } from "react-i18next";
 import { useParams } from "wouter";
 import { useState } from "react";
 import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
 import {
   BookOpen,
   Calendar,
@@ -38,68 +40,6 @@ import {
 import { Streamdown } from "streamdown";
 import { cn } from "@/lib/utils";
 
-// Mock data
-const MOCK_REPORT = {
-  nicheName: "Beer & Dumbbell Coach — Kalóriaszámláló Hedonistáknak",
-  verdict: "CONDITIONAL" as const,
-  synthesisScore: 7.8,
-  scores: {
-    marketSize: 7,
-    competition: 6,
-    feasibility: 8,
-    monetization: 7,
-    timeliness: 9,
-  },
-  reportMarkdown: `## Összefoglalás
-
-A **"Beer & Dumbbell Coach"** egy egyedülálló niche-t céloz meg: azokat a fitnesz-tudatos embereket, akik nem akarnak lemondani az alkoholról és a hedonista életmódról. Ez a szegmens jelenleg **alulszolgált** a piacon.
-
-## Piaci lehetőség
-
-A globális fitnesz alkalmazás piac 2025-ben **15,6 milliárd USD** értékű, és évi 17,6%-os növekedést mutat. Az alkohol-tudatos kalóriaszámláló szegmens szinte teljesen üres — a MyFitnessPal és a Lose It! csak marginálisan kezeli ezt a területet.
-
-### Célközönség
-- 25-40 éves, aktív életmódot folytató, de szociálisan aktív férfiak és nők
-- "Flexible dieting" (IIFYM) követők
-- Craft beer rajongók, akik fitnesz céljaikat is komolyan veszik
-
-## Versenytárs elemzés
-
-| Alkalmazás | Alkohol kezelés | Fitnesz coaching | Hedonista megközelítés |
-|---|---|---|---|
-| MyFitnessPal | Alap | Nincs | Nincs |
-| Lose It! | Alap | Nincs | Nincs |
-| Cronometer | Részletes | Nincs | Nincs |
-| **Beer & Dumbbell** | **Kiemelkedő** | **Igen** | **Igen** |
-
-## Monetizációs lehetőségek
-
-1. **Freemium modell**: Ingyenes alap, $4.99/hó premium
-2. **Craft brewery partnerségek**: Affiliate bevétel
-3. **Coaching marketplace**: Személyi edzők a platformon
-
-## Kockázatok
-
-- A "hedonista" márkaüzenet megosztó lehet
-- Az alkohol-kalória adatbázis karbantartása erőforrás-igényes
-- Az egészségügyi szabályozás szigorodhat
-
-## Következő lépések
-
-1. Validálj 50 potenciális felhasználóval (kérdőív)
-2. Építs egy MVP-t 3 hónap alatt
-3. Tesztelj craft beer közösségekben (Reddit, Facebook csoportok)
-`,
-  sources: [
-    { id: 1, title: "Fitness App Market Size & Forecast 2025", url: "https://statista.com", type: "industry", publishedAt: "2025-03", snippet: "A globális fitnesz alkalmazás piac 2025-ben 15,6 milliárd USD értékű." },
-    { id: 2, title: "IIFYM: The Science of Flexible Dieting", url: "https://pubmed.ncbi.nlm.nih.gov", type: "academic", publishedAt: "2024-11", snippet: "Tudományos vizsgálat a rugalmas diéta hatékonyságáról." },
-    { id: 3, title: "Craft Beer Market Trends 2025", url: "https://brewersassociation.org", type: "industry", publishedAt: "2025-01", snippet: "A craft sör piac 14,2 milliárd USD értékű az USA-ban." },
-    { id: 4, title: "r/fitness: Beer and gains — community discussion", url: "https://reddit.com/r/fitness", type: "community", publishedAt: "2025-02", snippet: "Közösségi vita az alkohol és fitnesz kompatibilitásáról." },
-    { id: 5, title: "MyFitnessPal App Store Reviews Analysis", url: "https://appfollow.io", type: "news", publishedAt: "2025-03", snippet: "Felhasználói visszajelzések elemzése — alkohol kezelés hiányosságai." },
-    { id: 6, title: "How to Build a Fitness App: Developer Guide", url: "https://medium.com", type: "blog", publishedAt: "2024-12", snippet: "Lépésről lépésre útmutató fitnesz alkalmazás fejlesztéséhez." },
-  ],
-  shareToken: "abc123xyz",
-};
 
 const SOURCE_TYPE_CONFIG = {
   academic: { icon: GraduationCap, label: "academic", class: "source-academic" },
@@ -120,7 +60,9 @@ function VerdictBadge({ verdict }: { verdict: "GO" | "KILL" | "CONDITIONAL" }) {
   );
 }
 
-function RadarScore({ scores }: { scores: typeof MOCK_REPORT.scores }) {
+type Scores = { marketSize: number; competition: number; feasibility: number; monetization: number; timeliness: number };
+
+function RadarScore({ scores }: { scores: Scores }) {
   const { t } = useTranslation();
   const data = [
     { axis: t("report.radarAxes.marketSize"), value: scores.marketSize, fullMark: 10 },
@@ -152,7 +94,12 @@ function RadarScore({ scores }: { scores: typeof MOCK_REPORT.scores }) {
 
 export default function ResearchReport() {
   const { t } = useTranslation();
-  const { id } = useParams<{ id: string }>();
+  const params = useParams<{ id: string }>();
+  const id = Number(params?.id);
+  const { data: research, isLoading, error } = trpc.research.get.useQuery(
+    { id },
+    { enabled: !Number.isNaN(id) && id > 0 },
+  );
   const [responseCount] = useState(23);
   const [surveyQuestions, setSurveyQuestions] = useState([
     { id: 1, text: "Mennyi pénzt költenél havonta egy ilyen alkalmazásra?", editing: false },
@@ -164,7 +111,74 @@ export default function ResearchReport() {
   const [editingQuestion, setEditingQuestion] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
 
-  const report = MOCK_REPORT;
+  if (isLoading) {
+    return (
+      <AppLayout>
+        <div className="p-8 max-w-5xl mx-auto space-y-4">
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="h-4 w-48" />
+          <div className="grid lg:grid-cols-3 gap-6">
+            <Skeleton className="h-64" />
+            <Skeleton className="h-64 lg:col-span-2" />
+          </div>
+          <Skeleton className="h-96" />
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (error) {
+    return (
+      <AppLayout>
+        <div className="p-8 max-w-5xl mx-auto">
+          <p className="text-destructive">{error.message}</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (!research) {
+    return (
+      <AppLayout>
+        <div className="p-8 max-w-5xl mx-auto">
+          <p>{t("report.notFound")}</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (research.status !== "done") {
+    return (
+      <AppLayout>
+        <div className="p-8 max-w-5xl mx-auto">
+          <p>{t("report.notReady")}</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const report = {
+    nicheName: research.nicheName,
+    verdict: (research.verdict ?? "CONDITIONAL") as "GO" | "KILL" | "CONDITIONAL",
+    synthesisScore: Number(research.synthesisScore ?? "0"),
+    scores: {
+      marketSize:   Number(research.scoreMarketSize ?? "0"),
+      competition:  Number(research.scoreCompetition ?? "0"),
+      feasibility:  Number(research.scoreFeasibility ?? "0"),
+      monetization: Number(research.scoreMonetization ?? "0"),
+      timeliness:   Number(research.scoreTimeliness ?? "0"),
+    },
+    reportMarkdown: research.reportMarkdown ?? "",
+    sources: research.sources.map((s) => ({
+      id: s.id,
+      title: s.title ?? "(cím nélkül)",
+      url: s.url,
+      type: s.sourceType,
+      publishedAt: s.publishedAt,
+      snippet: s.snippet ?? "",
+    })),
+    shareToken: research.shareToken,
+  };
 
   const copyShareLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}/share/${report.shareToken}`);
@@ -285,9 +299,9 @@ export default function ResearchReport() {
                             <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", cfg.class)}>
                               {t(`report.sourceTypes.${cfg.label}`)}
                             </span>
-                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <span className={cn("flex items-center gap-1 text-xs", source.publishedAt ? "text-muted-foreground" : "text-muted-foreground italic")}>
                               <Calendar className="w-3 h-3" />
-                              {source.publishedAt}
+                              {source.publishedAt ?? t("report.unknownDate")}
                             </span>
                           </div>
                           <a

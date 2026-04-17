@@ -72,6 +72,15 @@ export const hu = {
       duration: "Időtartam",
       failed: "A kutatás sikertelen. A kreditek visszatérítve.",
       retry: "Újra próbálkozás",
+      error: {
+        title: "A kutatás megszakadt",
+        phase: "Fázis",
+        refunded: "Kredit automatikusan visszatérítve",
+        retry: "Újrapróbálás",
+      },
+      synthesis: {
+        streaming: "A riport valós időben készül...",
+      },
     },
     // Report
     report: {
@@ -100,6 +109,10 @@ export const hu = {
         blog: "Blog",
         community: "Közösség",
       },
+      unknownDate: "Dátum ismeretlen",
+      notFound: "Kutatás nem található",
+      notReady: "A kutatás még fut — gyere vissza később",
+      loading: "Riport betöltése...",
       export: {
         pdf: "PDF letöltés",
         markdown: "Markdown letöltés",
@@ -149,6 +162,29 @@ export const hu = {
       prompts: "Promptok",
       testConnection: "Kapcsolat tesztelése",
       saveConfig: "Konfiguráció mentése",
+      ai: {
+        providersTab: "Szolgáltatók",
+        routingTab: "Modell Routing",
+        apiKeyPlaceholder: "API kulcs…",
+        save: "Mentés",
+        testConnection: "Kapcsolat Tesztelése",
+        configured: "Beállítva",
+        notSet: "Nincs megadva",
+        keySaved: "API kulcs elmentve",
+        testOk: "Kapcsolat sikeres",
+        testFail: "Kapcsolat sikertelen",
+        primaryModel: "Elsődleges Modell",
+        fallbackModel: "Tartalék Modell",
+        routingSaved: "Routing frissítve",
+        phases: {
+          wide_scan: "Wide Scan",
+          gap_detection: "Gap Detection",
+          deep_dives: "Deep Dives",
+          synthesis: "Synthesis",
+          polling: "Polling",
+          brainstorm: "Brainstorm",
+        },
+      },
     },
     // Auth
     auth: {
