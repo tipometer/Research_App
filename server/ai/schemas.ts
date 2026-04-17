@@ -47,7 +47,7 @@ export const SynthesisSchema = z.object({
     timeliness:   z.number(),
   }),
   reportMarkdown: z.string().min(4000),
-  verdictReason: z.string().min(50).max(500),
+  verdictReason: z.string().min(50).max(1500),
 });
 export type SynthesisOutput = z.infer<typeof SynthesisSchema>;
 
