@@ -150,13 +150,16 @@ describe("runPhase4Stream (Synthesis)", () => {
       reportMarkdown: "x".repeat(4500),
       verdictReason: "reasonable".repeat(10),
     };
-    // Simulate a progressive stream ending with the final full object
+    // Simulate a progressive stream with partials, and a resolved output promise
     async function* mockPartials() {
       yield { verdict: "GO" };
       yield { verdict: "GO", synthesisScore: 7.5 };
       yield finalObj;
     }
-    (streamText as any).mockReturnValue({ partialOutputStream: mockPartials() });
+    (streamText as any).mockReturnValue({
+      partialOutputStream: mockPartials(),
+      output: Promise.resolve(finalObj),
+    });
     (resolvePhase as any).mockResolvedValue({
       model: "claude-sonnet-4-6",
       provider: "anthropic",
@@ -170,12 +173,16 @@ describe("runPhase4Stream (Synthesis)", () => {
     expect(final.reportMarkdown.length).toBeGreaterThan(4000);
   });
 
-  it("throws when final partial is invalid", async () => {
+  it("throws when final output is invalid", async () => {
+    const invalidObj = { verdict: "GO", synthesisScore: "not a number" } as any;
     async function* mockPartials() {
       yield { verdict: "GO" };
-      yield { verdict: "GO", synthesisScore: "not a number" } as any;
+      yield invalidObj;
     }
-    (streamText as any).mockReturnValue({ partialOutputStream: mockPartials() });
+    (streamText as any).mockReturnValue({
+      partialOutputStream: mockPartials(),
+      output: Promise.resolve(invalidObj),
+    });
     (resolvePhase as any).mockResolvedValue({
       model: "claude-sonnet-4-6",
       provider: "anthropic",

@@ -17,9 +17,10 @@ const RETRY_RESERVED_MS = 30_000;
 /**
  * Google Search grounding tool — the v3 provider API replaced
  * `providerOptions.google.useSearchGrounding` with an explicit tool.
- * Must be named "google_search" per the provider contract.
+ * The tool key in the `tools` object must be "google_search" per the provider
+ * contract; `googleSearch()` takes no arguments in @ai-sdk/google@3.x.
  */
-const GOOGLE_SEARCH_TOOL = google.tools.googleSearch({ name: "google_search" });
+const GOOGLE_SEARCH_TOOL = google.tools.googleSearch({});
 
 export interface PhaseInput {
   nicheName: string;
@@ -153,8 +154,11 @@ Return JSON with:
 
 /**
  * Phase 4 — Synthesis with progressive streaming via `streamText` + `output`.
- * In v6, the last partial emitted from `partialOutputStream` equals the complete
- * validated object (once the stream finishes successfully).
+ * Partials are emitted via `onPartial` for live UI streaming.
+ * The final validated object is obtained from `streamResult.output` (a
+ * PromiseLike<InferCompleteOutput<OUTPUT>>) which resolves only after the
+ * stream completes — this is reliable in Vercel AI SDK v6 unlike using the
+ * last partial emitted from `partialOutputStream`.
  * No retry in C1 — streaming retry is C2 scope.
  */
 export async function runPhase4Stream(
@@ -164,7 +168,7 @@ export async function runPhase4Stream(
 ): Promise<SynthesisOutput> {
   const { model, client } = await resolvePhase("synthesis");
 
-  const { partialOutputStream } = streamText({
+  const streamResult = streamText({
     model: client(model),
     output: Output.object({ schema: SynthesisSchema }),
     messages: [
@@ -191,12 +195,15 @@ Return JSON with:
     abortSignal: options.abortSignal,
   });
 
-  let lastPartial: Partial<SynthesisOutput> = {};
-  for await (const partial of partialOutputStream) {
-    lastPartial = partial as Partial<SynthesisOutput>;
-    onPartial(lastPartial);
+  // Emit partials for live UI streaming while the stream is in progress
+  for await (const partial of streamResult.partialOutputStream) {
+    onPartial(partial as Partial<SynthesisOutput>);
   }
-  return SynthesisSchema.parse(lastPartial);
+
+  // Use the stream's final output promise — resolves to the fully-validated
+  // structured object only after the stream completes successfully (v6 API).
+  const final = await streamResult.output;
+  return SynthesisSchema.parse(final);
 }
 
 /**
