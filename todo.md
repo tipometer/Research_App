@@ -107,3 +107,9 @@
 
 ## Testing
 - [x] 17 vitest tests passing (auth, research, credits, admin, survey, brainstorm, security, GDPR)
+
+## UI Improvements (User Feedback)
+- [x] Polling panel legyen látható alapból a Riport nézetben (ne kelljen gombra kattintani az aktiváláshoz)
+- [x] Emberi kutatás (Survey) beállítási szekció az Új Kutatás oldalon (opcionális engedélyezés, kérdések előnézete)
+- [x] Survey kérdések szerkesztési lehetősége a Polling panelben (AI által generált kérdések módosítása)
+- [x] Polling tab neve legyen "Emberi Kutatás" (HU) / "Human Research" (EN) a jobb láthatóságért

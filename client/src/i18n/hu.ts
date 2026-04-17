@@ -108,6 +108,7 @@ export const hu = {
       },
       polling: {
         title: "Emberi validáció",
+        tabLabel: "Emberi Kutatás",
         start: "Primer kutatás indítása",
         shareLink: "Kérdőív link másolása",
         responses: "beérkezett válasz",

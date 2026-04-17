@@ -10,15 +10,19 @@ import { toast } from "sonner";
 import {
   BookOpen,
   Calendar,
+  CheckCircle2,
   Copy,
   Download,
+  Edit3,
   ExternalLink,
   FileText,
   GraduationCap,
   Link2,
   MessageSquare,
   Newspaper,
+  Plus,
   Share2,
+  Trash2,
   Upload,
   Users,
   Zap,
@@ -149,8 +153,16 @@ function RadarScore({ scores }: { scores: typeof MOCK_REPORT.scores }) {
 export default function ResearchReport() {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
-  const [pollingActive, setPollingActive] = useState(false);
   const [responseCount] = useState(23);
+  const [surveyQuestions, setSurveyQuestions] = useState([
+    { id: 1, text: "Mennyi pénzt költenél havonta egy ilyen alkalmazásra?", editing: false },
+    { id: 2, text: "Milyen platformon használnád legszívesebben? (iOS / Android / Web)", editing: false },
+    { id: 3, text: "Mi a legnagyobb problémád a jelenlegi kalóriaszámláló alkalmazásokkal?", editing: false },
+    { id: 4, text: "Ajánlanád-e ismerőseidnek? Mi lenne a fő érv?", editing: false },
+  ]);
+  const [surveyActive, setSurveyActive] = useState(false);
+  const [editingQuestion, setEditingQuestion] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
 
   const report = MOCK_REPORT;
 
@@ -239,7 +251,10 @@ export default function ResearchReport() {
           <TabsList className="mb-6">
             <TabsTrigger value="report">Riport</TabsTrigger>
             <TabsTrigger value="sources">{t("report.sources")} ({report.sources.length})</TabsTrigger>
-            <TabsTrigger value="polling">{t("report.polling.title")}</TabsTrigger>
+            <TabsTrigger value="polling" className="gap-1.5">
+              <Users className="w-3.5 h-3.5" />
+              {t("report.polling.tabLabel")}
+            </TabsTrigger>
           </TabsList>
 
           {/* Report tab */}
@@ -297,22 +312,114 @@ export default function ResearchReport() {
           {/* Polling tab */}
           <TabsContent value="polling">
             <div className="space-y-4">
+              {/* Explanation */}
+              <Card className="border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-900/10">
+                <CardContent className="pt-4 pb-4">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex-shrink-0">
+                      <Users className="w-5 h-5 text-purple-600" />
+                    </div>
+                    <div>
+                      <p className="font-semibold text-sm mb-1">Emberi Kutatás (Primer Research)</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Az AI által generált kérdőívet megoszhatod Facebook csoportokban, LinkedIn-en vagy bármilyen közösségben. 
+                        A beérkező válaszok alapján a rendszer frissíti a kutatási riportot és a verdiktet (<strong>Szintézis 2.0</strong>).
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Survey Questions Editor */}
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">{t("report.polling.title")}</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Generálj AI-alapú kérdőívet, oszd meg a közösségedben, és frissítsd a kutatást a valós visszajelzések alapján.
-                  </p>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {!pollingActive ? (
-                    <Button className="gap-2" onClick={() => setPollingActive(true)}>
-                      <MessageSquare className="w-4 h-4" />
-                      {t("report.polling.start")}
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-semibold">AI által generált kérdések</CardTitle>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1 text-xs"
+                      onClick={() => {
+                        const newQ = { id: Date.now(), text: "Új kérdés...", editing: false };
+                        setSurveyQuestions([...surveyQuestions, newQ]);
+                        setEditingQuestion(newQ.id);
+                        setEditText(newQ.text);
+                      }}
+                    >
+                      <Plus className="w-3 h-3" />
+                      Kérdés hozzáadása
                     </Button>
-                  ) : (
-                    <div className="space-y-4">
-                      {/* Survey link */}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Szerkeszd a kérdéseket a kérdőív aktivitása előtt.</p>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {surveyQuestions.map((q, i) => (
+                    <div key={q.id} className="flex items-start gap-2 p-3 rounded-lg border border-border bg-muted/20 group">
+                      <span className="w-6 h-6 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 text-xs flex items-center justify-center flex-shrink-0 mt-0.5 font-bold">{i + 1}</span>
+                      {editingQuestion === q.id ? (
+                        <div className="flex-1 flex items-center gap-2">
+                          <input
+                            autoFocus
+                            className="flex-1 text-sm bg-background border border-primary rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            value={editText}
+                            onChange={(e) => setEditText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                setSurveyQuestions(surveyQuestions.map(sq => sq.id === q.id ? { ...sq, text: editText } : sq));
+                                setEditingQuestion(null);
+                              }
+                            }}
+                          />
+                          <Button size="sm" variant="ghost" className="p-1 h-auto" onClick={() => {
+                            setSurveyQuestions(surveyQuestions.map(sq => sq.id === q.id ? { ...sq, text: editText } : sq));
+                            setEditingQuestion(null);
+                          }}>
+                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="flex-1 text-sm">{q.text}</p>
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Button size="sm" variant="ghost" className="p-1 h-auto" onClick={() => { setEditingQuestion(q.id); setEditText(q.text); }}>
+                              <Edit3 className="w-3 h-3" />
+                            </Button>
+                            <Button size="sm" variant="ghost" className="p-1 h-auto text-destructive" onClick={() => setSurveyQuestions(surveyQuestions.filter(sq => sq.id !== q.id))}>
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              {/* Activate survey */}
+              {!surveyActive ? (
+                <Card>
+                  <CardContent className="pt-4 pb-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-sm">Kérdőív aktivitálása</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">Publikus link generálása és válaszgyűjtés indítása</p>
+                      </div>
+                      <Button className="gap-2" onClick={() => setSurveyActive(true)}>
+                        <MessageSquare className="w-4 h-4" />
+                        Kérdőív indítása
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="space-y-3">
+                  {/* Survey link */}
+                  <Card className="border-green-200 dark:border-green-800">
+                    <CardContent className="pt-4 pb-4">
+                      <p className="text-xs font-medium text-green-600 dark:text-green-400 mb-2 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse inline-block" />
+                        Kérdőív aktiv, válaszokat fogad
+                      </p>
                       <div className="flex items-center gap-2 p-3 bg-muted/40 rounded-lg border border-border">
                         <Link2 className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                         <code className="text-xs flex-1 truncate">{window.location.origin}/survey/survey-abc123</code>
@@ -326,50 +433,50 @@ export default function ResearchReport() {
                           }}
                         >
                           <Copy className="w-3 h-3" />
-                          {t("report.polling.shareLink")}
+                          Másolás
                         </Button>
                       </div>
+                    </CardContent>
+                  </Card>
 
-                      {/* Response counter */}
-                      <div className="flex items-center gap-3 p-4 bg-primary/5 rounded-xl border border-primary/20">
-                        <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                          <Users className="w-5 h-5 text-primary" />
+                  {/* Response counter */}
+                  <Card>
+                    <CardContent className="pt-4 pb-4">
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                            <Users className="w-6 h-6 text-primary" />
+                          </div>
+                          <div>
+                            <p className="text-3xl font-black text-primary">{responseCount}</p>
+                            <p className="text-xs text-muted-foreground">beérkezett válasz</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-2xl font-bold text-primary">{responseCount}</p>
-                          <p className="text-xs text-muted-foreground">{t("report.polling.responses")}</p>
-                        </div>
-                        <div className="ml-auto">
-                          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                        <div className="ml-auto flex flex-col gap-2 items-end">
+                          <Button variant="outline" size="sm" className="gap-2">
+                            <Upload className="w-4 h-4" />
+                            CSV import
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="gap-2 bg-purple-600 hover:bg-purple-700"
+                            disabled={responseCount < 5}
+                            onClick={() => toast.info("Szintézis 2.0 futtatása... (hamarosan)")}
+                          >
+                            <Zap className="w-4 h-4" />
+                            Szintézis 2.0 futtatása
+                          </Button>
                         </div>
                       </div>
-
-                      {/* CSV Import */}
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" className="gap-2">
-                          <Upload className="w-4 h-4" />
-                          {t("report.polling.importCSV")}
-                        </Button>
-                        <Button
-                          size="sm"
-                          className="gap-2"
-                          disabled={responseCount < 5}
-                          onClick={() => toast.info("Szintézis 2.0 futtatása... (hamarosan)")}
-                        >
-                          <Zap className="w-4 h-4" />
-                          {t("report.polling.resynthesize")}
-                        </Button>
-                      </div>
-
-                      {responseCount < 5 && (
-                        <p className="text-xs text-muted-foreground">
-                          Minimum 5 válasz szükséges a Szintézis 2.0 futtatásához. (Jelenlegi: {responseCount}/5)
+                      {responseCount >= 5 && (
+                        <p className="text-xs text-muted-foreground mt-3 p-2 bg-muted/30 rounded-lg">
+                          Elegendő válasz érkezett! A Szintézis 2.0 frissíti a riportot és a verdiktet a valós visszajelzések alapján.
                         </p>
                       )}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
             </div>
           </TabsContent>
         </Tabs>

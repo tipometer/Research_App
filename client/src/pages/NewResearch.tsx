@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Crosshair, Layers, Search, Zap } from "lucide-react";
+import { Crosshair, Layers, Search, Users, Zap, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const strategies = [
@@ -44,8 +44,15 @@ export default function NewResearch() {
   const [strategy, setStrategy] = useState("gaps");
   const [batchMode, setBatchMode] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [humanResearchEnabled, setHumanResearchEnabled] = useState(false);
+  const [humanResearchExpanded, setHumanResearchExpanded] = useState(false);
+  const [surveyQuestions, setSurveyQuestions] = useState([
+    "Mennyi pénzt költenél havonta egy ilyen alkalmazásra?",
+    "Milyen platformon használnád legszívesebben? (iOS / Android / Web)",
+    "Mi a legnagyobb problémád a jelenlegi kalóriaszámláló alkalmazásokkal?",
+  ]);
 
-  const creditCost = batchMode ? 3 : 1;
+  const creditCost = (batchMode ? 3 : 1) + (humanResearchEnabled ? 0 : 0);
   const userCredits = 12; // mock
 
   const handleStart = async () => {
@@ -136,6 +143,56 @@ export default function NewResearch() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Human Research / Survey */}
+          <div className="rounded-xl border-2 border-border overflow-hidden">
+            <div className="flex items-center justify-between p-4 bg-card">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-purple-50 dark:bg-purple-900/20">
+                  <Users className="w-5 h-5 text-purple-500" />
+                </div>
+                <div>
+                  <p className="font-medium text-sm">Emberi kutatás (Primer Research)</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">AI generál kérdőívet, amit megoszthatsz közösségedben</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch checked={humanResearchEnabled} onCheckedChange={(v) => { setHumanResearchEnabled(v); if (v) setHumanResearchExpanded(true); }} />
+              </div>
+            </div>
+            {humanResearchEnabled && (
+              <div className="border-t border-border bg-muted/20">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setHumanResearchExpanded(!humanResearchExpanded)}
+                >
+                  <span>AI által generált kérdések előnézete ({surveyQuestions.length} kérdés)</span>
+                  {humanResearchExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+                {humanResearchExpanded && (
+                  <div className="px-4 pb-4 space-y-2">
+                    <p className="text-xs text-muted-foreground mb-3">A kutatás után az AI pontosítja és kiegészíti ezeket a kérdéseket. Szerkesztheted őket a riport nézetben.</p>
+                    {surveyQuestions.map((q, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className="w-5 h-5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 text-xs flex items-center justify-center flex-shrink-0 mt-0.5 font-bold">{i + 1}</span>
+                        <input
+                          className="flex-1 text-xs bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          value={q}
+                          onChange={(e) => {
+                            const updated = [...surveyQuestions];
+                            updated[i] = e.target.value;
+                            setSurveyQuestions(updated);
+                          }}
+                        />
+                      </div>
+                    ))}
+                    <p className="text-xs text-muted-foreground pt-1">A kutatás indítása után egy megosztható kérdőív link generálódik automatikusan.</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Batch mode */}

@@ -102,6 +102,7 @@ export const en = {
       },
       polling: {
         title: "Human Validation",
+        tabLabel: "Human Research",
         start: "Start Primer Research",
         shareLink: "Copy Survey Link",
         responses: "responses received",
