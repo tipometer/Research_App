@@ -186,6 +186,12 @@ export async function seedModelRouting() {
   const existing = await db.select().from(modelRouting);
   if (existing.length > 0) return;  // idempotens — csak ha üres
 
+  // FIGYELEM: az alábbi modellnevek a seed pillanatában érvényes pontos,
+  // verzionált API azonosítók legyenek (pl. "claude-sonnet-4-6-20251001",
+  // "gpt-4.1-mini-2025-04-14"). Az implementációs ticket első feladata ezt
+  // a provider docs alapján pontosítani, és itt kommentben is dokumentálni
+  // hogy mikor frissült és melyik docs verzióból jön. Admin UI-ból
+  // override-olható, de a seed legyen tiszta és reprodukálható.
   await db.insert(modelRouting).values([
     { phase: "wide_scan",     primaryModel: "gemini-2.5-flash" },
     { phase: "gap_detection", primaryModel: "gemini-2.5-flash" },
@@ -205,20 +211,26 @@ Minden seed érték admin UI-ból átírható — ezek csak első deploy default
 
 ### 6.1 Grounded fázisok
 
-Fázis 1 (Wide Scan), Fázis 2 (Gap Detection), Fázis 3 (Deep Dives) mindegyike a `googleSearch` tool-t használja a Vercel AI SDK `@ai-sdk/google` csomagjából.
+Fázis 1 (Wide Scan), Fázis 2 (Gap Detection), Fázis 3 (Deep Dives) mindegyike a **Gemini Search Grounding** feature-t használja a Vercel AI SDK `@ai-sdk/google` csomagjából.
 
 ### 6.2 Vercel AI SDK hívás shape
+
+**Kritikus megjegyzés**: a Vercel AI SDK v5-ben `generateObject()` **nem** fogad `tools` paramétert — structured output (Zod schema) és tool use kölcsönösen kizárják egymást egy híváson belül. A Gemini Search Grounding-ot ezért **nem** a `tools:` kulccsal, hanem a `providerOptions:`-al engedélyezzük:
 
 ```typescript
 const result = await generateObject({
   model: google("gemini-2.5-flash"),
-  tools: { googleSearch: google.tools.googleSearch() },
+  providerOptions: {
+    google: { useSearchGrounding: true },
+  },
   schema: WideScanSchema,
   messages,
 });
 
 // result.providerMetadata.google.groundingMetadata tartalmazza a raw Gemini shape-et
 ```
+
+Az implementációs ticket első feladatai közé kerül ennek a `providerOptions.google` paraméter-névnek (`useSearchGrounding`) végső ellenőrzése az aktuális `@ai-sdk/google` verzió dokumentációjában — a Google provider API felülete néha változik minor verziók között. A `providerMetadata.google.groundingMetadata` jelenlét megmarad mindkét aktivációs pattern esetén.
 
 ### 6.3 Raw Gemini groundingMetadata shape
 
@@ -482,6 +494,10 @@ Mivel egy modell-generáció adja mind a markdown-t mind a struktúrát (egy hí
 ### 9.3 Zod retry pattern
 
 ```typescript
+import { generateObject, NoObjectGeneratedError } from "ai";
+import { z } from "zod";
+import type { LanguageModelV1, ModelMessage } from "ai";
+
 export async function invokeWithRetry<T extends z.ZodSchema>(
   model: LanguageModelV1,
   schema: T,
@@ -567,7 +583,9 @@ if (event.type === "pipeline_error") {
 
 ### 10.3 Existing 17 vitest teszt
 
-Smoke test — el kell hogy menjen a refaktor után is. A mock-okat frissíteni kell, ha a pipeline signature-je változik (ma az `invokeLLM`-re hivatkoznak; új: `llmRouter.invoke` vagy `invokeWithRetry`).
+Smoke test — el kell hogy menjen a refaktor után is.
+
+**Helyes elhelyezés**: a 17 teszt a `server/deep-research.test.ts` fájlban van (209 sor), **nem** a `server/auth.logout.test.ts`-ben (62 sor, független auth teszt — NEM hivatkozik `invokeLLM`-re és nem érintett C1 scope-ban). Csak a `deep-research.test.ts` mock-olását kell frissíteni az új router API-ra (`invokeLLM` → `llmRouter.invoke` vagy `invokeWithRetry`).
 
 ### 10.4 Coverage szint
 
