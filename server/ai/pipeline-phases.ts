@@ -108,10 +108,29 @@ async function invokeGrounded<TSchema extends z.ZodSchema>(
     parsed = parseAndValidate(rawResult.text);
   }
 
-  const grounding = (rawResult as any).providerMetadata?.google?.groundingMetadata as
+  const providerMeta = (rawResult as any).providerMetadata;
+  const grounding = providerMeta?.google?.groundingMetadata as
     | GroundingMetadata
     | undefined;
-  const sources = grounding ? extractSources(grounding) : [];
+
+  if (process.env.DEBUG_GROUNDING === "1") {
+    console.warn(
+      "[invokeGrounded] providerMetadata keys:",
+      providerMeta ? Object.keys(providerMeta) : "(none)",
+      "— google keys:",
+      providerMeta?.google ? Object.keys(providerMeta.google) : "(none)",
+    );
+    if (grounding) {
+      console.warn(
+        "[invokeGrounded] groundingMetadata keys:",
+        Object.keys(grounding),
+        "— chunks len:",
+        (grounding as any).groundingChunks?.length ?? "undefined",
+      );
+    }
+  }
+
+  const sources = extractSources(grounding);
 
   return { data: parsed, sources };
 }

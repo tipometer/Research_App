@@ -35,13 +35,24 @@ export function extractOriginalUrl(redirectUrl: string): string {
   return redirectUrl;
 }
 
-export function extractSources(metadata: GroundingMetadata): ExtractedSource[] {
-  return metadata.groundingChunks.map((chunk, idx) => {
+export function extractSources(metadata: GroundingMetadata | null | undefined): ExtractedSource[] {
+  if (!metadata) return [];
+  const chunks = metadata.groundingChunks ?? [];
+  const supports = metadata.groundingSupports ?? [];
+  if (chunks.length === 0) {
+    // Log the raw shape for diagnostic purposes when we expected chunks but got none.
+    // Helps when providers (v6 @ai-sdk/google) change the metadata structure.
+    if (process.env.DEBUG_GROUNDING === "1") {
+      console.warn("[grounding] No chunks found. Raw shape:", JSON.stringify(metadata).slice(0, 800));
+    }
+    return [];
+  }
+  return chunks.map((chunk, idx) => {
     const url = extractOriginalUrl(chunk.web.uri);
     return {
       url,
       title: chunk.web.title,
-      snippet: metadata.groundingSupports
+      snippet: supports
         .filter(s => s.groundingChunkIndices.includes(idx))
         .map(s => s.segment.text)
         .join(" … "),
