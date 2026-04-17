@@ -190,10 +190,9 @@ describe("research.create", () => {
     const caller = appRouter.createCaller(makeContext(null));
     await expect(
       caller.research.create({
-        niche: "Test niche",
+        nicheName: "Test niche",
         description: "Test description",
-        strategy: "underserved_niches",
-        language: "hu",
+        strategy: "gaps",
       })
     ).rejects.toThrow();
   });
@@ -201,10 +200,10 @@ describe("research.create", () => {
 
 // ── Credit Tests ───────────────────────────────────────────────────────────
 
-describe("billing.getCredits", () => {
+describe("user.credits", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
-    await expect(caller.billing.getCredits()).rejects.toThrow();
+    await expect(caller.user.credits()).rejects.toThrow();
   });
 });
 
@@ -249,7 +248,7 @@ describe("brainstorm.generate", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
     await expect(
-      caller.brainstorm.generate({ context: "fitness apps", language: "hu" })
+      caller.brainstorm.generate({ context: "fitness apps for daily tracking" })
     ).rejects.toThrow();
   });
 });
@@ -261,10 +260,9 @@ describe("security: input validation", () => {
     const caller = appRouter.createCaller(makeContext(makeUser()));
     await expect(
       caller.research.create({
-        niche: "",
+        nicheName: "",
         description: "desc",
-        strategy: "underserved_niches",
-        language: "hu",
+        strategy: "gaps",
       })
     ).rejects.toThrow();
   });
@@ -273,10 +271,9 @@ describe("security: input validation", () => {
     const caller = appRouter.createCaller(makeContext(makeUser()));
     await expect(
       caller.research.create({
-        niche: "a".repeat(201),
+        nicheName: "a".repeat(257),
         description: "desc",
-        strategy: "underserved_niches",
-        language: "hu",
+        strategy: "gaps",
       })
     ).rejects.toThrow();
   });
@@ -292,17 +289,17 @@ describe("security: input validation", () => {
 
 // ── GDPR Tests ─────────────────────────────────────────────────────────────
 
-describe("user.getCredits", () => {
+describe("user.credits", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
-    await expect(caller.user.getCredits()).rejects.toThrow();
+    await expect(caller.user.credits()).rejects.toThrow();
   });
 });
 
-describe("user.getTransactions", () => {
+describe("user.transactions", () => {
   it("throws UNAUTHORIZED for unauthenticated user", async () => {
     const caller = appRouter.createCaller(makeContext(null));
-    await expect(caller.user.getTransactions()).rejects.toThrow();
+    await expect(caller.user.transactions()).rejects.toThrow();
   });
 });
 
