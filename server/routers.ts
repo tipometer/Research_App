@@ -5,6 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod/v4";
 import {
+  getDb,
   getResearches,
   getResearchById,
   createResearch,
@@ -25,6 +26,10 @@ import {
   createSurvey,
 } from "./db";
 import { runBrainstorm, runPolling } from "./ai/pipeline-phases";
+import { getProvider, type ProviderId } from "./ai/providers";
+import { eq } from "drizzle-orm";
+import { aiConfigs, modelRouting } from "../drizzle/schema";
+import { generateText } from "ai";
 import { nanoid } from "nanoid";
 
 // ─── Admin procedure ──────────────────────────────────────────────────────────
@@ -256,6 +261,120 @@ export const appRouter = router({
         await logAudit(ctx.user.id, "admin.adjust_credits", { targetUserId: input.userId, amount: input.amount }, ctx.req);
         return { success: true };
       }),
+
+    // ─── AI Config ───────────────────────────────────────────────────────────
+    ai: router({
+      listConfigs: adminProcedure.query(async () => {
+        const db = await getDb();
+        if (!db) return [];
+        const rows = await db.select().from(aiConfigs);
+        // NEVER return apiKey — only masked presence flag
+        return rows.map(r => ({
+          provider: r.provider,
+          hasKey: !!r.apiKey && r.apiKey.length > 0,
+          isActive: r.isActive,
+          updatedAt: r.updatedAt,
+        }));
+      }),
+
+      setProviderKey: adminProcedure
+        .input(z.object({
+          provider: z.enum(["openai", "anthropic", "gemini"]),
+          apiKey: z.string().min(10),
+          isActive: z.boolean().default(true),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "No DB" });
+          const existing = await db.select().from(aiConfigs).where(eq(aiConfigs.provider, input.provider)).limit(1);
+          if (existing.length > 0) {
+            await db.update(aiConfigs)
+              .set({ apiKey: input.apiKey, isActive: input.isActive })
+              .where(eq(aiConfigs.provider, input.provider));
+          } else {
+            await db.insert(aiConfigs).values({
+              provider: input.provider,
+              apiKey: input.apiKey,
+              isActive: input.isActive,
+            });
+          }
+          await logAudit(
+            ctx.user.id,
+            "admin.ai.setProviderKey",
+            { provider: input.provider, isActive: input.isActive },
+            ctx.req,
+          );
+          return { success: true };
+        }),
+
+      testProvider: adminProcedure
+        .input(z.object({
+          provider: z.enum(["openai", "anthropic", "gemini"]),
+        }))
+        .mutation(async ({ input }) => {
+          const db = await getDb();
+          if (!db) return { ok: false, error: "No DB connection" };
+          const rows = await db.select().from(aiConfigs).where(eq(aiConfigs.provider, input.provider)).limit(1);
+          const apiKey = rows[0]?.apiKey;
+          if (!apiKey) return { ok: false, error: "No API key set" };
+
+          try {
+            const client = getProvider(input.provider as ProviderId, apiKey);
+            const defaultModel =
+              input.provider === "openai"    ? "gpt-4.1-mini" :
+              input.provider === "anthropic" ? "claude-sonnet-4-6" :
+                                               "gemini-2.5-flash";
+            await generateText({
+              model: client(defaultModel),
+              messages: [{ role: "user", content: "Reply with exactly one word: OK" }],
+            });
+            return { ok: true };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { ok: false, error: message };
+          }
+        }),
+
+      listRouting: adminProcedure.query(async () => {
+        const db = await getDb();
+        if (!db) return [];
+        return db.select().from(modelRouting);
+      }),
+
+      updateRouting: adminProcedure
+        .input(z.object({
+          phase: z.enum(["wide_scan", "gap_detection", "deep_dives", "synthesis", "polling", "brainstorm"]),
+          primaryModel: z.string().min(3),
+          fallbackModel: z.string().optional(),
+          systemPrompt: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "No DB" });
+          const existing = await db.select().from(modelRouting).where(eq(modelRouting.phase, input.phase)).limit(1);
+          if (existing.length > 0) {
+            await db.update(modelRouting).set({
+              primaryModel: input.primaryModel,
+              fallbackModel: input.fallbackModel ?? null,
+              systemPrompt: input.systemPrompt ?? existing[0]!.systemPrompt,
+            }).where(eq(modelRouting.phase, input.phase));
+          } else {
+            await db.insert(modelRouting).values({
+              phase: input.phase,
+              primaryModel: input.primaryModel,
+              fallbackModel: input.fallbackModel,
+              systemPrompt: input.systemPrompt,
+            });
+          }
+          await logAudit(
+            ctx.user.id,
+            "admin.ai.updateRouting",
+            { phase: input.phase, primaryModel: input.primaryModel },
+            ctx.req,
+          );
+          return { success: true };
+        }),
+    }),
   }),
 });
 

@@ -305,3 +305,106 @@ describe("user.getTransactions", () => {
     await expect(caller.user.getTransactions()).rejects.toThrow();
   });
 });
+
+// ── Admin AI Config Tests ──────────────────────────────────────────────────
+
+describe("admin.ai.listConfigs", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(caller.admin.ai.listConfigs()).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(caller.admin.ai.listConfigs()).rejects.toThrow();
+  });
+
+  it("returns empty array when no DB is available", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    // No DB in test environment — should return []
+    const result = await caller.admin.ai.listConfigs();
+    expect(result).toEqual([]);
+  });
+});
+
+describe("admin.ai.setProviderKey", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(
+      caller.admin.ai.setProviderKey({ provider: "openai", apiKey: "sk-test-key-12345", isActive: true })
+    ).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(
+      caller.admin.ai.setProviderKey({ provider: "openai", apiKey: "sk-test-key-12345", isActive: true })
+    ).rejects.toThrow();
+  });
+
+  it("rejects apiKey shorter than 10 characters", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    await expect(
+      caller.admin.ai.setProviderKey({ provider: "openai", apiKey: "short", isActive: true })
+    ).rejects.toThrow();
+  });
+});
+
+describe("admin.ai.testProvider", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(caller.admin.ai.testProvider({ provider: "openai" })).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(caller.admin.ai.testProvider({ provider: "openai" })).rejects.toThrow();
+  });
+
+  it("returns ok=false when no DB connection", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    const result = await caller.admin.ai.testProvider({ provider: "openai" });
+    expect(result).toMatchObject({ ok: false });
+  });
+});
+
+describe("admin.ai.listRouting", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(caller.admin.ai.listRouting()).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(caller.admin.ai.listRouting()).rejects.toThrow();
+  });
+
+  it("returns empty array when no DB is available", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    const result = await caller.admin.ai.listRouting();
+    expect(result).toEqual([]);
+  });
+});
+
+describe("admin.ai.updateRouting", () => {
+  it("throws UNAUTHORIZED for unauthenticated user", async () => {
+    const caller = appRouter.createCaller(makeContext(null));
+    await expect(
+      caller.admin.ai.updateRouting({ phase: "wide_scan", primaryModel: "gpt-4.1-mini" })
+    ).rejects.toThrow();
+  });
+
+  it("throws FORBIDDEN for non-admin user", async () => {
+    const caller = appRouter.createCaller(makeContext(makeUser({ role: "user" })));
+    await expect(
+      caller.admin.ai.updateRouting({ phase: "wide_scan", primaryModel: "gpt-4.1-mini" })
+    ).rejects.toThrow();
+  });
+
+  it("rejects primaryModel shorter than 3 characters", async () => {
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    await expect(
+      caller.admin.ai.updateRouting({ phase: "wide_scan", primaryModel: "gp" })
+    ).rejects.toThrow();
+  });
+});
