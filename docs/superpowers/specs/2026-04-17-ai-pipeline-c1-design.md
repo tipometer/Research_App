@@ -598,7 +598,7 @@ Cél: **megfelelő egység teszt coverage** a router lookup logikára, a groundi
 - [ ] `pnpm check` 0 TypeScript hiba
 - [ ] `pnpm test` minden unit teszt zöld (17 meglévő refaktorálva + új coverage a router / grounding / classify / schemas / retry modulokra)
 - [ ] `pnpm test:integration` manuálisan zöld mind a 6 fázisra
-- [ ] Manus `invokeLLM` hivatkozás sehol a `server/` alatt (kivéve deprecated alias, ha meghagyjuk)
+- [ ] Manus `invokeLLM` hivatkozás sehol a `server/` alatt (hard delete, nincs deprecated alias)
 - [ ] Admin UI-n beállított API kulcs + modelRouting változás tényleg hatással van a következő kutatás indításakor
 - [ ] E2E: új kutatás → SSE streamel → Synthesis progresszívan megjelenik → verdict + radar kirajzolódik
 - [ ] "Dátum ismeretlen" label megjelenik a forráskönyvtárban, ha null `publishedAt`
@@ -668,5 +668,5 @@ A sprint **akkor kész**, ha:
 3. A forráskönyvtárban a Gemini Search által visszaadott valódi webes URL-ek jelennek meg (nem LLM-hallucinált)
 4. A Synthesis fázisban a riport markdown progresszívan, SSE-n keresztül jelenik meg (nem 180s vakvárakozás)
 5. Zod validation error esetén 1x retry után a pipeline sikerrel zárul (90%+ ráta a valós használatban)
-6. A 17 meglévő vitest teszt + ~50 új unit teszt mind zöld
+6. A 17 meglévő vitest teszt refaktorálva az új router API-ra és zöld, plusz új unit teszt coverage a router lookup / grounding extraction / classify / schemas / retry modulokra (meaningful happy path + boundary + hiba-ág, nem teszt-szám kvóta — lásd §10.4)
 7. A 3 doc update (PRD/UI spec/Handoff → v3.2) committálva
