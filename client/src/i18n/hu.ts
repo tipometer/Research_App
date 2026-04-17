@@ -110,6 +110,9 @@ export const hu = {
         community: "Közösség",
       },
       unknownDate: "Dátum ismeretlen",
+      notFound: "Kutatás nem található",
+      notReady: "A kutatás még fut — gyere vissza később",
+      loading: "Riport betöltése...",
       export: {
         pdf: "PDF letöltés",
         markdown: "Markdown letöltés",

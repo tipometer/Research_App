@@ -104,6 +104,9 @@ export const en = {
         community: "Community",
       },
       unknownDate: "Unknown date",
+      notFound: "Research not found",
+      notReady: "Research still running — check back later",
+      loading: "Loading report...",
       export: {
         pdf: "Download PDF",
         markdown: "Download Markdown",
