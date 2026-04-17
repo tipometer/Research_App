@@ -67,6 +67,15 @@ export const en = {
       duration: "Duration",
       failed: "Research failed. Credits have been refunded.",
       retry: "Retry",
+      error: {
+        title: "Research interrupted",
+        phase: "Phase",
+        refunded: "Credit automatically refunded",
+        retry: "Retry",
+      },
+      synthesis: {
+        streaming: "Report generating live...",
+      },
     },
     report: {
       verdict: {
@@ -94,6 +103,7 @@ export const en = {
         blog: "Blog",
         community: "Community",
       },
+      unknownDate: "Unknown date",
       export: {
         pdf: "Download PDF",
         markdown: "Download Markdown",

@@ -285,9 +285,9 @@ export default function ResearchReport() {
                             <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", cfg.class)}>
                               {t(`report.sourceTypes.${cfg.label}`)}
                             </span>
-                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <span className={cn("flex items-center gap-1 text-xs", source.publishedAt ? "text-muted-foreground" : "text-muted-foreground italic")}>
                               <Calendar className="w-3 h-3" />
-                              {source.publishedAt}
+                              {source.publishedAt ?? t("report.unknownDate")}
                             </span>
                           </div>
                           <a

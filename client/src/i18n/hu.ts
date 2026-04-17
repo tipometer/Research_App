@@ -72,6 +72,15 @@ export const hu = {
       duration: "Időtartam",
       failed: "A kutatás sikertelen. A kreditek visszatérítve.",
       retry: "Újra próbálkozás",
+      error: {
+        title: "A kutatás megszakadt",
+        phase: "Fázis",
+        refunded: "Kredit automatikusan visszatérítve",
+        retry: "Újrapróbálás",
+      },
+      synthesis: {
+        streaming: "A riport valós időben készül...",
+      },
     },
     // Report
     report: {
@@ -100,6 +109,7 @@ export const hu = {
         blog: "Blog",
         community: "Közösség",
       },
+      unknownDate: "Dátum ismeretlen",
       export: {
         pdf: "PDF letöltés",
         markdown: "Markdown letöltés",
