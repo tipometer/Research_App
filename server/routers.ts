@@ -24,7 +24,7 @@ import {
   getSurveyByResearchId,
   createSurvey,
 } from "./db";
-import { invokeLLM } from "./_core/llm";
+import { runBrainstorm, runPolling } from "./ai/pipeline-phases";
 import { nanoid } from "nanoid";
 
 // ─── Admin procedure ──────────────────────────────────────────────────────────
@@ -150,49 +150,20 @@ export const appRouter = router({
         const credits = await getUserCredits(ctx.user.id);
         if (credits < 1) throw new TRPCError({ code: "PAYMENT_REQUIRED", message: "Insufficient credits" });
 
-        const prompt = `You are a market research expert. Generate exactly 10 niche business ideas based on this context: "${input.context}"${input.refinement ? `. Refinement: ${input.refinement}` : ""}.
-        
-Return a JSON array of 10 objects with fields: id (1-10), title (string, max 50 chars), description (string, max 150 chars), score (number 1-10, one decimal).
-Be creative, specific, and commercially viable.`;
+        const context = input.context + (input.refinement ? `\nRefinement: ${input.refinement}` : "");
 
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: "You are a market research expert. Always respond with valid JSON only." },
-            { role: "user", content: prompt },
-          ],
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "brainstorm_ideas",
-              strict: true,
-              schema: {
-                type: "object",
-                properties: {
-                  ideas: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        id: { type: "integer" },
-                        title: { type: "string" },
-                        description: { type: "string" },
-                        score: { type: "number" },
-                      },
-                      required: ["id", "title", "description", "score"],
-                      additionalProperties: false,
-                    },
-                  },
-                },
-                required: ["ideas"],
-                additionalProperties: false,
-              },
-            },
-          },
-        });
-
-        const content = response.choices?.[0]?.message?.content ?? "{}";
-        const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
-        const ideas = parsed.ideas ?? [];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(new Error("Brainstorm timeout")), 60_000);
+        let ideas: Awaited<ReturnType<typeof runBrainstorm>>["ideas"];
+        try {
+          const result = await runBrainstorm(
+            { context },
+            { abortSignal: controller.signal },
+          );
+          ideas = result.ideas;
+        } finally {
+          clearTimeout(timeout);
+        }
 
         // Save session
         await createBrainstormSession(ctx.user.id, input.context, ideas);
@@ -228,23 +199,20 @@ Be creative, specific, and commercially viable.`;
         if (research.status !== "done") throw new TRPCError({ code: "BAD_REQUEST", message: "Research must be completed first" });
 
         // Generate survey questions via AI
-        const prompt = `Based on this business niche: "${research.nicheName}", generate 4 validation survey questions.
-Return JSON with fields: questions (array of { id, type ("radio"|"scale"|"text"), text, options (array of strings, only for radio/scale) })`;
-
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: "You are a market research expert. Return valid JSON only." },
-            { role: "user", content: prompt },
-          ],
-        });
-
-        const content = response.choices?.[0]?.message?.content ?? "{}";
-        let questions;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(new Error("Polling timeout")), 60_000);
+        let questions: Awaited<ReturnType<typeof runPolling>>["questions"];
         try {
-          const parsed = JSON.parse(typeof content === "string" ? content : "{}");
-          questions = parsed.questions ?? [];
-        } catch {
-          questions = [];
+          const result = await runPolling(
+            {
+              nicheName: research.nicheName,
+              report: research.reportMarkdown ?? "",
+            },
+            { abortSignal: controller.signal },
+          );
+          questions = result.questions;
+        } finally {
+          clearTimeout(timeout);
         }
 
         const token = nanoid(32);
