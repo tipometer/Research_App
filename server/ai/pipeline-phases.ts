@@ -50,7 +50,7 @@ async function invokeGrounded<TSchema extends z.ZodSchema>(
     return generateText({
       model: modelInstance,
       messages: [...messages, ...extraMessages],
-      experimental_output: Output.object({ schema }),
+      output: Output.object({ schema }),
       tools: { google_search: GOOGLE_SEARCH_TOOL },
       abortSignal: options.abortSignal,
     });
@@ -60,7 +60,7 @@ async function invokeGrounded<TSchema extends z.ZodSchema>(
   let parsed: z.infer<TSchema>;
   try {
     rawResult = await oneCall();
-    parsed = schema.parse((rawResult as any).experimental_output);
+    parsed = schema.parse(rawResult.output);
   } catch (err) {
     if (!(err instanceof z.ZodError)) throw err;
     if (options.deadline && options.deadline - Date.now() < RETRY_RESERVED_MS) throw err;
@@ -77,7 +77,7 @@ async function invokeGrounded<TSchema extends z.ZodSchema>(
           `Return a valid JSON object matching the exact schema. Do not add extra fields.`,
       },
     ]);
-    parsed = schema.parse((rawResult as any).experimental_output);
+    parsed = schema.parse(rawResult.output);
   }
 
   const grounding = (rawResult as any).providerMetadata?.google?.groundingMetadata as

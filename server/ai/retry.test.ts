@@ -22,7 +22,7 @@ beforeEach(() => {
 describe("invokeWithRetry", () => {
   it("returns validated object on first success", async () => {
     (generateText as any).mockResolvedValueOnce({
-      experimental_output: { n: 42 },
+      output: { n: 42 },
     });
     const result = await invokeWithRetry({} as any, TestSchema, []);
     expect(result).toEqual({ n: 42 });
@@ -34,8 +34,8 @@ describe("invokeWithRetry", () => {
     // In v6, Output.object probably validates internally; if not, our wrapper does.
     // Simulating a bad-then-good sequence:
     (generateText as any)
-      .mockResolvedValueOnce({ experimental_output: { n: "not a number" } }) // will fail Zod
-      .mockResolvedValueOnce({ experimental_output: { n: 7 } });
+      .mockResolvedValueOnce({ output: { n: "not a number" } }) // will fail Zod
+      .mockResolvedValueOnce({ output: { n: 7 } });
     const result = await invokeWithRetry({} as any, TestSchema, []);
     expect(result).toEqual({ n: 7 });
     expect(generateText).toHaveBeenCalledTimes(2);
@@ -43,8 +43,8 @@ describe("invokeWithRetry", () => {
 
   it("retries once on Zod validation, fails again → throws", async () => {
     (generateText as any)
-      .mockResolvedValueOnce({ experimental_output: { n: "bad" } })
-      .mockResolvedValueOnce({ experimental_output: { n: "still bad" } });
+      .mockResolvedValueOnce({ output: { n: "bad" } })
+      .mockResolvedValueOnce({ output: { n: "still bad" } });
     await expect(invokeWithRetry({} as any, TestSchema, [])).rejects.toThrow();
     expect(generateText).toHaveBeenCalledTimes(2);
   });
@@ -56,7 +56,7 @@ describe("invokeWithRetry", () => {
   });
 
   it("skips retry when remainingMs is below threshold", async () => {
-    (generateText as any).mockResolvedValueOnce({ experimental_output: { n: "bad" } });
+    (generateText as any).mockResolvedValueOnce({ output: { n: "bad" } });
     const deadline = Date.now() + 10_000; // 10s remaining, below 30s threshold
     await expect(invokeWithRetry({} as any, TestSchema, [], { deadline })).rejects.toThrow();
     expect(generateText).toHaveBeenCalledOnce();
@@ -64,8 +64,8 @@ describe("invokeWithRetry", () => {
 
   it("embeds Zod error details in retry prompt", async () => {
     (generateText as any)
-      .mockResolvedValueOnce({ experimental_output: { n: "bad" } })
-      .mockResolvedValueOnce({ experimental_output: { n: 1 } });
+      .mockResolvedValueOnce({ output: { n: "bad" } })
+      .mockResolvedValueOnce({ output: { n: 1 } });
     await invokeWithRetry({} as any, TestSchema, [{ role: "user", content: "initial" }]);
     const secondCallArgs = (generateText as any).mock.calls[1][0];
     const lastMessage = secondCallArgs.messages[secondCallArgs.messages.length - 1];

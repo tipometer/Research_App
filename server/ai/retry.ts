@@ -23,11 +23,11 @@ export async function invokeWithRetry<T extends z.ZodTypeAny>(
     const result = await generateText({
       model,
       messages,
-      experimental_output: Output.object({ schema }),
+      output: Output.object({ schema }),
     });
     // Be defensive: parse through the schema to guarantee validation
     // even if Output.object validated internally.
-    const parsed = schema.parse((result as any).experimental_output);
+    const parsed = schema.parse(result.output);
     return parsed as z.infer<T>;
   } catch (err) {
     if (!(err instanceof z.ZodError)) throw err;
@@ -53,9 +53,9 @@ export async function invokeWithRetry<T extends z.ZodTypeAny>(
             `Return a valid JSON object matching the exact schema. Do not add extra fields.`,
         },
       ],
-      experimental_output: Output.object({ schema }),
+      output: Output.object({ schema }),
     });
-    const parsed = schema.parse((retryResult as any).experimental_output);
+    const parsed = schema.parse(retryResult.output);
     return parsed as z.infer<T>;
   }
 }

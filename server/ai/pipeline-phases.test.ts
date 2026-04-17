@@ -27,7 +27,7 @@ describe("runPhase1 (Wide Scan)", () => {
   it("returns parsed output + extracted sources from groundingMetadata", async () => {
     mockResolvePhase();
     (generateText as any).mockResolvedValue({
-      experimental_output: { keywords: ["a", "b", "c"], summary: "x".repeat(60) },
+      output: { keywords: ["a", "b", "c"], summary: "x".repeat(60) },
       providerMetadata: {
         google: {
           groundingMetadata: {
@@ -48,7 +48,7 @@ describe("runPhase1 (Wide Scan)", () => {
   it("returns empty sources when no grounding metadata", async () => {
     mockResolvePhase();
     (generateText as any).mockResolvedValue({
-      experimental_output: { keywords: ["a", "b", "c"], summary: "x".repeat(60) },
+      output: { keywords: ["a", "b", "c"], summary: "x".repeat(60) },
       providerMetadata: {},
     });
     const result = await runPhase1({ nicheName: "X", strategy: "gaps" });
@@ -59,11 +59,11 @@ describe("runPhase1 (Wide Scan)", () => {
     mockResolvePhase();
     (generateText as any)
       .mockResolvedValueOnce({
-        experimental_output: { keywords: ["only-one"], summary: "too short" }, // fails min(3) and min(50)
+        output: { keywords: ["only-one"], summary: "too short" }, // fails min(3) and min(50)
         providerMetadata: { google: { groundingMetadata: { groundingChunks: [], groundingSupports: [], webSearchQueries: [] } } },
       })
       .mockResolvedValueOnce({
-        experimental_output: { keywords: ["a", "b", "c"], summary: "x".repeat(60) },
+        output: { keywords: ["a", "b", "c"], summary: "x".repeat(60) },
         providerMetadata: { google: { groundingMetadata: { groundingChunks: [], groundingSupports: [], webSearchQueries: [] } } },
       });
     const result = await runPhase1({ nicheName: "X", strategy: "gaps" });
@@ -77,7 +77,7 @@ describe("runPhase2 (Gap Detection)", () => {
   it("returns parsed gaps + competitors + sources", async () => {
     mockResolvePhase();
     (generateText as any).mockResolvedValue({
-      experimental_output: {
+      output: {
         gaps: [{ title: "g1", description: "d1" }, { title: "g2", description: "d2" }],
         competitors: [{ name: "c1", weakness: "w1" }, { name: "c2", weakness: "w2" }],
         summary: "x".repeat(60),
@@ -105,7 +105,7 @@ describe("runPhase3 (Deep Dives)", () => {
   it("returns parsed monetization + challenges + sources", async () => {
     mockResolvePhase();
     (generateText as any).mockResolvedValue({
-      experimental_output: {
+      output: {
         monetizationModels: [
           { name: "m1", description: "d1" },
           { name: "m2", description: "d2", revenueEstimate: "$10k" },
