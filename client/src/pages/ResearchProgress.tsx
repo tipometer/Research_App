@@ -5,8 +5,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useTranslation } from "react-i18next";
 import { useLocation, useParams } from "wouter";
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronUp, Clock, Globe, Loader2, XCircle, AlertTriangle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, Clock, Globe, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Streamdown } from "streamdown";
 
 type PhaseStatus = "pending" | "running" | "done" | "failed";
 
@@ -41,7 +42,13 @@ export default function ResearchProgress() {
   const [phases, setPhases] = useState<Phase[]>(INITIAL_PHASES);
   const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
   const [overallStatus, setOverallStatus] = useState<"running" | "done" | "failed">("running");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [streamingReport, setStreamingReport] = useState<string>("");
+  const [synthesisPartial, setSynthesisPartial] = useState<any>(null);
+  const [error, setError] = useState<{
+    phase: string | null;
+    message: string;
+    retriable: boolean;
+  } | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const feedIdRef = useRef(0);
   const esRef = useRef<EventSource | null>(null);
@@ -84,6 +91,13 @@ export default function ResearchProgress() {
             ));
             break;
 
+          case "synthesis_progress":
+            setSynthesisPartial(data.partial);
+            if (data.partial?.reportMarkdown) {
+              setStreamingReport(data.partial.reportMarkdown);
+            }
+            break;
+
           case "pipeline_complete":
             addFeed(`🎉 Kutatás befejezve! Verdikt: ${data.verdict} — ${data.synthesisScore}/10`, "phase");
             setPhases((p) => p.map((ph) => ph.status === "running" ? { ...ph, status: "done" } : ph));
@@ -94,7 +108,11 @@ export default function ResearchProgress() {
           case "pipeline_error":
             addFeed(`❌ Hiba: ${data.message}`, "error");
             setOverallStatus("failed");
-            setErrorMessage(data.message);
+            setError({
+              phase: data.phase ?? null,
+              message: data.message,
+              retriable: data.retriable ?? false,
+            });
             setPhases((p) => p.map((ph) => ph.status === "running" ? { ...ph, status: "failed" } : ph));
             es.close();
             break;
@@ -228,6 +246,18 @@ export default function ResearchProgress() {
             ))}
           </div>
 
+          {/* Streaming synthesis report */}
+          {currentPhase?.id === "synthesis" && streamingReport && (
+            <div className="mt-6 rounded-lg border bg-muted/30 p-4 lg:col-span-2">
+              <p className="text-sm text-muted-foreground mb-2">
+                {t("progress.synthesis.streaming")}
+              </p>
+              <div className="prose prose-sm max-h-96 overflow-y-auto">
+                <Streamdown>{streamingReport}</Streamdown>
+              </div>
+            </div>
+          )}
+
           {/* Live feed */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">
@@ -270,24 +300,31 @@ export default function ResearchProgress() {
             </div>
 
             {/* Error state with auto-refund notice */}
-            {overallStatus === "failed" && (
-              <Card className="border-destructive bg-destructive/5">
-                <CardContent className="pt-4 pb-4">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-destructive mt-0.5 flex-shrink-0" />
-                    <div>
-                      <p className="text-sm text-destructive font-medium">A kutatás sikertelen volt</p>
-                      {errorMessage && <p className="text-xs text-muted-foreground mt-1">{errorMessage}</p>}
-                      <p className="text-xs text-green-600 dark:text-green-400 mt-2 font-medium">
-                        ✓ A felhasznált kredit automatikusan visszatérítésre került.
-                      </p>
-                    </div>
-                  </div>
-                  <Button variant="outline" size="sm" className="mt-3 gap-2" onClick={() => navigate("/research/new")}>
-                    Új kutatás indítása
+            {error && (
+              <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
+                <h3 className="font-semibold text-destructive">
+                  {t("progress.error.title")}
+                </h3>
+                {error.phase && (
+                  <p className="text-sm mt-1">
+                    {t("progress.error.phase")}: <strong>{error.phase}</strong>
+                  </p>
+                )}
+                <p className="mt-2 text-sm">{error.message}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {t("progress.error.refunded")}
+                </p>
+                {error.retriable && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => navigate("/research/new")}
+                  >
+                    {t("progress.error.retry")}
                   </Button>
-                </CardContent>
-              </Card>
+                )}
+              </div>
             )}
 
             {/* Success state */}
