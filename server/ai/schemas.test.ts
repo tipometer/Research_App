@@ -48,10 +48,10 @@ describe("GapDetectionSchema", () => {
 });
 
 describe("DeepDivesSchema", () => {
-  it("accepts valid input with optional revenueEstimate", () => {
+  it("accepts valid input with nullable revenueEstimate", () => {
     const valid = {
       monetizationModels: [
-        { name: "m1", description: "d1" },
+        { name: "m1", description: "d1", revenueEstimate: null },
         { name: "m2", description: "d2", revenueEstimate: "$10k/mo" },
       ],
       technicalChallenges: [
@@ -115,12 +115,12 @@ describe("SynthesisSchema", () => {
 });
 
 describe("PollingSchema", () => {
-  it("accepts 3-5 questions", () => {
+  it("accepts 3-5 questions with null options for non-choice types", () => {
     const valid = {
       questions: [
         { id: "q1", type: "single_choice" as const, text: "Q1?", options: ["a", "b"] },
-        { id: "q2", type: "likert" as const, text: "Q2?" },
-        { id: "q3", type: "short_text" as const, text: "Q3?" },
+        { id: "q2", type: "likert" as const, text: "Q2?", options: null },
+        { id: "q3", type: "short_text" as const, text: "Q3?", options: null },
       ],
     };
     expect(PollingSchema.parse(valid)).toEqual(valid);

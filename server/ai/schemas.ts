@@ -23,7 +23,7 @@ export const DeepDivesSchema = z.object({
   monetizationModels: z.array(z.object({
     name: z.string(),
     description: z.string(),
-    revenueEstimate: z.string().optional(),
+    revenueEstimate: z.string().nullable(),
   })).min(2).max(5),
   technicalChallenges: z.array(z.object({
     title: z.string(),
@@ -53,7 +53,7 @@ export const PollingSchema = z.object({
     id: z.string(),
     type: z.enum(["single_choice", "multiple_choice", "likert", "short_text"]),
     text: z.string(),
-    options: z.array(z.string()).optional(),
+    options: z.array(z.string()).nullable(),
   })).min(3).max(5),
 });
 export type PollingOutput = z.infer<typeof PollingSchema>;

@@ -36,49 +36,76 @@ export interface PhaseResult<T> {
 /**
  * Grounded phase invoker. Unlike `invokeWithRetry` (Task 7), this preserves
  * providerMetadata so we can extract groundingMetadata for the sources table.
- * Inlines the 1x Zod retry pattern.
+ * Inlines the 1x Zod/JSON retry pattern.
+ *
+ * NOTE: Google Gemini does NOT allow `response_mime_type: application/json`
+ * (i.e. `output: Output.object(...)`) combined with googleSearch tool use —
+ * these are mutually exclusive on the Google API side. We therefore drop the
+ * `output:` parameter and instead:
+ *   1. Append a JSON shape instruction to the user message.
+ *   2. Call generateText with only `tools: { google_search: ... }`.
+ *   3. Manually JSON.parse result.text and validate with Zod.
+ *   4. Retry once on SyntaxError or ZodError.
  */
 async function invokeGrounded<TSchema extends z.ZodSchema>(
   _phase: Phase,
   schema: TSchema,
   messages: ModelMessage[],
+  jsonShapeInstruction: string,
   options: { abortSignal?: AbortSignal; deadline?: number } = {},
 ): Promise<PhaseResult<z.infer<TSchema>>> {
   const { model, client } = await resolvePhase(_phase);
   const modelInstance = client(model);
 
+  const messagesWithJsonHint: ModelMessage[] = [
+    ...messages,
+    {
+      role: "user" as const,
+      content: `Return your response as a single JSON object (no prose before or after, no markdown fences) matching this structure:\n${jsonShapeInstruction}`,
+    },
+  ];
+
   async function oneCall(extraMessages: ModelMessage[] = []) {
     return generateText({
       model: modelInstance,
-      messages: [...messages, ...extraMessages],
-      output: Output.object({ schema }),
+      messages: [...messagesWithJsonHint, ...extraMessages],
       tools: { google_search: GOOGLE_SEARCH_TOOL },
       abortSignal: options.abortSignal,
     });
+  }
+
+  function parseAndValidate(raw: string): z.infer<TSchema> {
+    // Strip any markdown fences or surrounding prose if the model adds them
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const jsonText = jsonMatch ? jsonMatch[0] : raw;
+    const parsed = JSON.parse(jsonText);
+    return schema.parse(parsed);
   }
 
   let rawResult: Awaited<ReturnType<typeof oneCall>>;
   let parsed: z.infer<TSchema>;
   try {
     rawResult = await oneCall();
-    parsed = schema.parse(rawResult.output);
+    parsed = parseAndValidate(rawResult.text);
   } catch (err) {
-    if (!(err instanceof z.ZodError)) throw err;
+    const isRetryable = err instanceof z.ZodError || err instanceof SyntaxError;
+    if (!isRetryable) throw err;
     if (options.deadline && options.deadline - Date.now() < RETRY_RESERVED_MS) throw err;
 
-    const errorDetails = err.issues
-      .map(e => `${e.path.join(".") || "(root)"}: ${e.message}`)
-      .join("; ");
+    const errorDetails =
+      err instanceof z.ZodError
+        ? err.issues.map(e => `${e.path.join(".") || "(root)"}: ${e.message}`).join("; ")
+        : `JSON parse error: ${(err as Error).message}`;
 
     rawResult = await oneCall([
       {
         role: "user",
         content:
-          `Your previous response failed validation with these errors: ${errorDetails}. ` +
-          `Return a valid JSON object matching the exact schema. Do not add extra fields.`,
+          `Your previous response failed validation: ${errorDetails}. ` +
+          `Return ONLY a valid JSON object matching the exact schema. No markdown fences, no prose.`,
       },
     ]);
-    parsed = schema.parse(rawResult.output);
+    parsed = parseAndValidate(rawResult.text);
   }
 
   const grounding = (rawResult as any).providerMetadata?.google?.groundingMetadata as
@@ -93,6 +120,10 @@ export async function runPhase1(
   input: PhaseInput,
   options: { abortSignal?: AbortSignal; deadline?: number } = {},
 ): Promise<PhaseResult<WideScanOutput>> {
+  const jsonShape = `{
+  "keywords": string[] (3 to 7 items — actual search terms you used),
+  "summary": string (50–500 characters, 2–3 sentence summary of initial findings)
+}`;
   return invokeGrounded("wide_scan", WideScanSchema, [
     {
       role: "system",
@@ -103,17 +134,20 @@ export async function runPhase1(
       content: `Perform a wide scan market analysis for this niche: "${input.nicheName}". Strategy: ${input.strategy}.
 ${input.description ? `Additional context: ${input.description}` : ""}
 
-Return JSON with:
-- keywords: 3-7 search keywords you used
-- summary: 2-3 sentence summary of initial findings`,
+Search the web for current market data, trends, and relevant sources. Collect your findings and prepare to return them as JSON.`,
     },
-  ], options);
+  ], jsonShape, options);
 }
 
 export async function runPhase2(
   input: PhaseInput & { phase1Summary: string },
   options: { abortSignal?: AbortSignal; deadline?: number } = {},
 ): Promise<PhaseResult<GapDetectionOutput>> {
+  const jsonShape = `{
+  "gaps": [{ "title": string, "description": string }, ...] (2 to 5 items — underserved segments or unmet needs),
+  "competitors": [{ "name": string, "weakness": string }, ...] (2 to 5 items — existing players and their weaknesses),
+  "summary": string (50–500 characters, 2–3 sentence summary of gap analysis findings)
+}`;
   return invokeGrounded("gap_detection", GapDetectionSchema, [
     {
       role: "system",
@@ -123,18 +157,20 @@ export async function runPhase2(
       role: "user",
       content: `Based on the wide scan of "${input.nicheName}" (summary: ${input.phase1Summary}), identify market gaps and underserved segments, and competitors with weaknesses.
 
-Return JSON with:
-- gaps: 2-5 market gaps (title, description)
-- competitors: 2-5 competitors (name, weakness)
-- summary: 2-3 sentence summary`,
+Search the web for competitor reviews, customer complaints, and underserved segments. Collect your findings and prepare to return them as JSON.`,
     },
-  ], options);
+  ], jsonShape, options);
 }
 
 export async function runPhase3(
   input: PhaseInput & { phase2Summary: string },
   options: { abortSignal?: AbortSignal; deadline?: number } = {},
 ): Promise<PhaseResult<DeepDivesOutput>> {
+  const jsonShape = `{
+  "monetizationModels": [{ "name": string, "description": string, "revenueEstimate": string | null }, ...] (2 to 5 items — use null for revenueEstimate when unknown),
+  "technicalChallenges": [{ "title": string, "severity": "low" | "medium" | "high" }, ...] (2 to 5 items),
+  "summary": string (50–500 characters, 2–3 sentence summary of deep dive findings)
+}`;
   return invokeGrounded("deep_dives", DeepDivesSchema, [
     {
       role: "system",
@@ -144,12 +180,9 @@ export async function runPhase3(
       role: "user",
       content: `Perform deep dives on "${input.nicheName}" (gap analysis: ${input.phase2Summary}) focusing on monetization models, technical feasibility, and market timing.
 
-Return JSON with:
-- monetizationModels: 2-5 models (name, description, revenueEstimate optional)
-- technicalChallenges: 2-5 challenges (title, severity: low/medium/high)
-- summary: 2-3 sentence summary`,
+Search the web for pricing models, revenue data, technical stack examples, and implementation challenges. Collect your findings and prepare to return them as JSON.`,
     },
-  ], options);
+  ], jsonShape, options);
 }
 
 /**
@@ -171,6 +204,7 @@ export async function runPhase4Stream(
   const streamResult = streamText({
     model: client(model),
     output: Output.object({ schema: SynthesisSchema }),
+    maxOutputTokens: 8192,
     messages: [
       {
         role: "system",
@@ -230,7 +264,8 @@ ${input.report.substring(0, 2000)}
 
 Generate 3-5 focused questions to validate the most critical market unknowns (e.g. pricing willingness, feature preferences). Mix question types: single_choice (with options), multiple_choice (with options), likert, short_text.
 
-Return JSON: { questions: [{ id, type, text, options? }] }`,
+Return JSON: { questions: [{ id, type, text, options: string[] | null }] }
+IMPORTANT: For likert and short_text questions, set options to null (not omit it).`,
       },
     ],
     abortSignal: options.abortSignal,
