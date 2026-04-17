@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const WideScanSchema = z.object({
   keywords: z.array(z.string()).min(3).max(7),
-  summary: z.string().min(50).max(500),
+  summary: z.string().min(50).max(1500),
 });
 export type WideScanOutput = z.infer<typeof WideScanSchema>;
 
@@ -15,7 +15,7 @@ export const GapDetectionSchema = z.object({
     name: z.string(),
     weakness: z.string(),
   })).min(2).max(5),
-  summary: z.string().min(50).max(500),
+  summary: z.string().min(50).max(1500),
 });
 export type GapDetectionOutput = z.infer<typeof GapDetectionSchema>;
 
@@ -29,7 +29,7 @@ export const DeepDivesSchema = z.object({
     title: z.string(),
     severity: z.enum(["low", "medium", "high"]),
   })).min(2).max(5),
-  summary: z.string().min(50).max(500),
+  summary: z.string().min(50).max(1500),
 });
 export type DeepDivesOutput = z.infer<typeof DeepDivesSchema>;
 
