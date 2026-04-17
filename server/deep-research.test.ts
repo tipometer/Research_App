@@ -363,6 +363,17 @@ describe("admin.ai.testProvider", () => {
     const result = await caller.admin.ai.testProvider({ provider: "openai" });
     expect(result).toMatchObject({ ok: false });
   });
+
+  it("returns rate-limited response when called twice within 10s", async () => {
+    // Use a distinct provider to avoid colliding with the previous test's cooldown state
+    const caller = appRouter.createCaller(makeContext(makeAdminUser()));
+    // First call — sets the cooldown (returns ok=false due to no DB, but that's fine)
+    await caller.admin.ai.testProvider({ provider: "gemini" });
+    // Second call — should be rate limited
+    const result = await caller.admin.ai.testProvider({ provider: "gemini" });
+    expect(result).toMatchObject({ ok: false });
+    expect(result.error).toMatch(/[Rr]ate limit|wait/);
+  });
 });
 
 describe("admin.ai.listRouting", () => {
