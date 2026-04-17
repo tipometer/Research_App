@@ -146,14 +146,18 @@ export async function runPhase1(
   return invokeGrounded("wide_scan", WideScanSchema, [
     {
       role: "system",
-      content: "You are a market research expert. Use web search to find real, recent sources.",
+      content: "You are a market research analyst. You MUST ground every claim in your output with the web search tool. Do not answer from your own knowledge — every finding must be traceable to a search result. When you reference a fact, cite its source by URL inline in your summary (e.g., \"[per example.com/article]\"). This is mandatory for compliance.",
     },
     {
       role: "user",
       content: `Perform a wide scan market analysis for this niche: "${input.nicheName}". Strategy: ${input.strategy}.
 ${input.description ? `Additional context: ${input.description}` : ""}
 
-Search the web for current market data, trends, and relevant sources. Collect your findings and prepare to return them as JSON.`,
+REQUIRED PROCESS:
+1. Use the web search tool to find current market data, trends, and reports (minimum 5 searches with varied queries).
+2. BASE your summary EXCLUSIVELY on the sources you found — do not introduce claims from your pre-training knowledge.
+3. In your summary, reference at least 3 specific URLs inline (e.g., "per statista.com/xyz, the market is $N billion").
+4. Return the final result as JSON.`,
     },
   ], jsonShape, options);
 }
@@ -170,13 +174,18 @@ export async function runPhase2(
   return invokeGrounded("gap_detection", GapDetectionSchema, [
     {
       role: "system",
-      content: "You are a market research expert. Use web search to identify gaps and competitors.",
+      content: "You are a market research analyst. You MUST ground every claim with web search results. Every gap and competitor you identify must come from a web source — never from memory. Cite sources by URL inline in your summary (e.g., \"[per techcrunch.com/xyz]\"). This is mandatory for compliance.",
     },
     {
       role: "user",
-      content: `Based on the wide scan of "${input.nicheName}" (summary: ${input.phase1Summary}), identify market gaps and underserved segments, and competitors with weaknesses.
+      content: `Based on the wide scan of "${input.nicheName}" (summary: ${input.phase1Summary}), identify market gaps and underserved segments, plus existing competitors with their weaknesses.
 
-Search the web for competitor reviews, customer complaints, and underserved segments. Collect your findings and prepare to return them as JSON.`,
+REQUIRED PROCESS:
+1. Use the web search tool with at least 5 varied queries (competitor reviews, customer complaints, market gaps, underserved segments).
+2. Identify gaps ONLY from evidence in the search results — do not speculate from general knowledge.
+3. Each competitor's name + weakness must be traceable to a specific web source you found.
+4. In your summary, reference at least 3 URLs inline.
+5. Return the result as JSON.`,
     },
   ], jsonShape, options);
 }
@@ -193,13 +202,18 @@ export async function runPhase3(
   return invokeGrounded("deep_dives", DeepDivesSchema, [
     {
       role: "system",
-      content: "You are a market research expert. Use web search to find current monetization examples and technical details.",
+      content: "You are a market research analyst. You MUST ground every claim with web search results. Every monetization model and technical challenge must come from real-world examples found via web search — never from memory. Cite sources by URL inline in your summary (e.g., \"[per crunchbase.com/xyz]\"). This is mandatory for compliance.",
     },
     {
       role: "user",
       content: `Perform deep dives on "${input.nicheName}" (gap analysis: ${input.phase2Summary}) focusing on monetization models, technical feasibility, and market timing.
 
-Search the web for pricing models, revenue data, technical stack examples, and implementation challenges. Collect your findings and prepare to return them as JSON.`,
+REQUIRED PROCESS:
+1. Use the web search tool with at least 5 varied queries (pricing models, revenue data, technical stack examples, implementation challenges).
+2. Monetization examples must be traceable to REAL companies/products found in searches — not hypothetical.
+3. Technical challenges must come from engineering blogs, case studies, or industry reports you find.
+4. In your summary, reference at least 3 URLs inline.
+5. Return the result as JSON.`,
     },
   ], jsonShape, options);
 }
