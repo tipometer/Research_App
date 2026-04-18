@@ -98,4 +98,21 @@ describe("executeWithFallback", () => {
     expect(onFallback).toHaveBeenCalledOnce();
     expect(onFallback).toHaveBeenCalledWith(expect.stringMatching(/503/));
   });
+
+  it("invokes onFallback BEFORE fallback call (fires even if fallback fails)", async () => {
+    const primary = vi.fn().mockRejectedValue(makeApiError(503));
+    const order: string[] = [];
+    const fallback = vi.fn().mockImplementation(async () => {
+      order.push("fallback-called");
+      throw new Error("fallback-fail");
+    });
+    const onFallback = vi.fn().mockImplementation(() => {
+      order.push("onFallback-fired");
+    });
+    await expect(
+      executeWithFallback(primary, fallback, { phase: "wide_scan", onFallback })
+    ).rejects.toThrow("fallback-fail");
+    // onFallback must fire BEFORE fallback is called
+    expect(order).toEqual(["onFallback-fired", "fallback-called"]);
+  });
 });

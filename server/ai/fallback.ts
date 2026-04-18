@@ -32,10 +32,10 @@ export async function executeWithFallback<T>(
       ? `${err.statusCode}: ${err.message}`
       : String(err);
     console.warn(`[fallback] ${ctx.phase} primary failed (${reason}). Attempting fallback.`);
+    // Fire onFallback BEFORE the attempt — user sees the event whether or not fallback succeeds
+    ctx.onFallback?.(reason);
     try {
-      const result = await fallback();
-      ctx.onFallback?.(reason);
-      return result;
+      return await fallback();
     } catch (fallbackErr) {
       console.error(`[fallback] ${ctx.phase} fallback also failed:`, fallbackErr);
       throw fallbackErr;
