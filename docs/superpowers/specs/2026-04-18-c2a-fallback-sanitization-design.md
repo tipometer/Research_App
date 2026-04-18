@@ -720,7 +720,7 @@ A meglévő 4 integration test (`pipeline-phases.integration.test.ts`) változat
 | 2 | 2.2 | `pipeline-phases.ts` — `runPhase4Stream` pre-stream fallback (streamStarted flag + non-streaming fallback) | Green |
 | 2 | 2.3 | `pipeline-phases.ts` — `runPolling` + `runBrainstorm` migrate + sanitize | Green |
 | 2 | 2.4 | `pipeline-phases.test.ts` — ~8 új teszt | Green |
-| **3** | 3.1 | `research-pipeline.ts` — `fallback_used` SSE event + onFallback callback wiring | Green |
+| **3** | 3.1 | `research-pipeline.ts` — `fallback_used` SSE event + onFallback callback wiring. **CRITICAL**: the internal `FallbackContext.onFallback` is `(reason) => void`, but the pipeline-phase callers (`runPhase1`, `runPhase4Stream`, etc.) expose `onFallback: (model, reason) => void` externally. The SSE emitter in research-pipeline.ts provides this callback with both args: `onFallback: (model, reason) => sendEvent(res, { type: "fallback_used", phase, fallbackModel: model, reason, groundingLost })`. The model name flows from `pipeline-phases.ts` closure (`fallback.model` bound in `resolvePhaseWithFallback` result). Task 3.1 subagent MUST emit the model name in the SSE event — cannot be omitted. | Green |
 | 3 | 3.2 | `research-pipeline.ts` — `logAudit` extension `research.fallback_used` | Green |
 | 3 | 3.3 | `deep-research.test.ts` — regression check (explicit grep instruction) | All 101 existing pass |
 | **4** | 4.1 | `AdminPanel.tsx` — `RoutingRow` cross-provider warning + two-click confirm | Visual working |
@@ -783,6 +783,7 @@ A meglévő 4 integration test (`pipeline-phases.integration.test.ts`) változat
 16. **404 explicit test**: `isFallbackEligible` suite has an explicit false-returning test for 404
 17. **Task 3.3 regression**: explicit subagent instruction to grep `deep-research.test.ts` for message assertions before running tests
 18. **Task 5.1 E2E smoke**: manual protocol documented (happy path + phantom model 404 → pipeline_error, NOT fallback)
+19. **onFallback two-layer signature** (Task 3.1 critical): internal `FallbackContext.onFallback = (reason) => void` (executeWithFallback nem ismer model név-et); external `pipeline-phases` option `onFallback = (model, reason) => void` (closure köti `fb.model`-t); SSE emitter kapja mindkét argumentumot és a `fallback_used` event-be beemeli `fallbackModel`-t. A subagent NEM hagyhatja ki a model nevet az SSE-ből.
 
 ---
 
