@@ -11,6 +11,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { runResearchPipeline } from "../research-pipeline";
 import { sdk } from "./sdk";
+import { getMasterKey } from "../ai/crypto";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -32,6 +33,10 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  // Fast-fail: validate MASTER_ENCRYPTION_KEY is set + well-formed before any work.
+  // Throws with a clear error message if the env is missing or has wrong length.
+  getMasterKey();
+
   const app = express();
   const server = createServer(app);
 
