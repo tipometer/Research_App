@@ -5,8 +5,21 @@ const IV_LENGTH = 12;    // 96 bits — NIST SP 800-38D recommended GCM IV
 const TAG_LENGTH = 16;   // 128 bits — GCM standard
 const KEY_LENGTH = 32;   // 256 bits — AES-256
 
+// Standard base64 alphabet with optional 0-2 trailing '=' padding chars.
+// Used as a cheap sanity check on ciphertext segments — Node's Buffer.from(x,
+// "base64") silently returns garbage bytes on invalid input rather than
+// throwing, so we match the charset explicitly at the format-guard layer.
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
 // ─── Master key singleton ────────────────────────────────────────────────────
 
+/**
+ * Process-global singleton. Persists for the lifetime of the Node process.
+ *
+ * Key rotation requires a process restart — changing MASTER_ENCRYPTION_KEY at
+ * runtime does NOT re-read the env var. In tests, use __resetMasterKeyForTesting()
+ * to clear the cache between assertions.
+ */
 let cachedMasterKey: Buffer | null = null;
 
 export function getMasterKey(): Buffer {
@@ -53,7 +66,23 @@ export class DecryptionError extends Error {
 
 // ─── Encrypt / decrypt ────────────────────────────────────────────────────────
 
+/**
+ * Defense-in-depth guard. Symmetric with the env-time validation in
+ * getMasterKey() — catches callers that bypass the singleton and pass a
+ * wrong-length Buffer. Throws a PLAIN Error (not DecryptionError): this is a
+ * programmer / config bug, not a ciphertext problem, and should not be
+ * classified as a non-eligible decryption failure by the fallback classifier.
+ */
+function assertValidKeyLength(masterKey: Buffer): void {
+  if (masterKey.length !== KEY_LENGTH) {
+    throw new Error(
+      `Invalid master key length: expected ${KEY_LENGTH} bytes, got ${masterKey.length}`
+    );
+  }
+}
+
 export function encrypt(plaintext: string, masterKey: Buffer, aad: string): string {
+  assertValidKeyLength(masterKey);
   const iv = randomBytes(IV_LENGTH);
   const cipher = createCipheriv("aes-256-gcm", masterKey, iv);
   cipher.setAAD(Buffer.from(aad, "utf-8"));
@@ -68,14 +97,12 @@ export function encrypt(plaintext: string, masterKey: Buffer, aad: string): stri
 }
 
 export function decrypt(stored: string, masterKey: Buffer, aad: string): string {
+  assertValidKeyLength(masterKey);
   const parts = stored.split(":");
 
   // Format guard: 4 segments required.
   // Defense-in-depth — also catches plaintext inputs that contain ':' chars
-  // (e.g., accidental API-key-shaped inputs). Malformed base64 within segments
-  // is NOT caught here (Node's Buffer.from silently returns garbage) — it
-  // surfaces at decipher.final() auth-tag check and is wrapped by the catch
-  // block below.
+  // (e.g., accidental API-key-shaped inputs).
   if (parts.length !== 4) {
     throw new DecryptionError(
       `Invalid ciphertext format: expected 4 segments, got ${parts.length}`
@@ -86,6 +113,21 @@ export function decrypt(stored: string, masterKey: Buffer, aad: string): string 
 
   if (version !== VERSION) {
     throw new DecryptionError(`Unsupported ciphertext version: ${version}`);
+  }
+
+  // Base64 sanity check: Node's Buffer.from(x, "base64") silently accepts
+  // invalid input and returns garbage bytes. Without this guard, malformed
+  // ciphertext would defer its failure to the decipher.final() auth-tag check
+  // and surface with a generic "corrupted ciphertext" message. Matching the
+  // standard base64 charset up-front gives a specific, actionable error.
+  for (const [name, seg] of [
+    ["iv", ivB64],
+    ["ciphertext", ctB64],
+    ["tag", tagB64],
+  ] as const) {
+    if (!BASE64_RE.test(seg)) {
+      throw new DecryptionError(`Malformed base64 in ${name} segment`);
+    }
   }
 
   try {
