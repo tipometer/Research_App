@@ -31,7 +31,7 @@ import { eq } from "drizzle-orm";
 import { aiConfigs, modelRouting } from "../drizzle/schema";
 import { generateText } from "ai";
 import { nanoid } from "nanoid";
-import { encrypt, getMasterKey } from "./ai/crypto";
+import { encrypt, getMasterKey, DecryptionError } from "./ai/crypto";
 import { decryptIfNeeded } from "./ai/router";
 
 // In-memory rate limit for admin.ai.testProvider — 10s cooldown per (userId, provider)
@@ -347,7 +347,18 @@ export const appRouter = router({
             const aad = `aiConfig:${input.provider.toLowerCase()}`;
             apiKey = decryptIfNeeded(storedKey, aad);
           } catch (err) {
-            return { ok: false, error: err instanceof Error ? err.message : String(err) };
+            // Admin-facing stable error message: we deliberately do NOT forward
+            // DecryptionError.message (which could gain detail in future revisions) or
+            // the error cause — keeps the response shape decoupled from crypto internals.
+            if (err instanceof DecryptionError) {
+              return {
+                ok: false,
+                error: "Stored key is corrupt or was encrypted with a different master key. Re-save the key to fix.",
+              };
+            }
+            // Non-DecryptionError (unexpected — log for debugging but show generic message)
+            console.warn(`[admin.testProvider] Unexpected decryptIfNeeded error:`, err);
+            return { ok: false, error: "Failed to read stored key. Re-save the key and try again." };
           }
 
           try {
