@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Activity, AlertCircle, AlertTriangle, CheckCircle2, Key, Loader2, Save, Settings, Shield, Users, Zap } from "lucide-react";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 
 // ─── Client-side provider detection (mirrors server-side logic) ───────────────
@@ -52,11 +52,16 @@ interface ProviderRowProps {
   onTest: () => Promise<void>;
   isSaving: boolean;
   isTesting: boolean;
+  registerClear?: (fn: () => void) => void;
 }
 
-function ProviderRow({ provider, hasKey, isActive, onSave, onTest, isSaving, isTesting }: ProviderRowProps) {
+function ProviderRow({ provider, hasKey, isActive, onSave, onTest, isSaving, isTesting, registerClear }: ProviderRowProps) {
   const { t } = useTranslation();
   const [apiKey, setApiKey] = useState("");
+
+  useEffect(() => {
+    registerClear?.(() => setApiKey(""));
+  }, [registerClear]);
 
   return (
     <div className="space-y-2 p-4 border rounded-lg">
@@ -80,7 +85,6 @@ function ProviderRow({ provider, hasKey, isActive, onSave, onTest, isSaving, isT
           disabled={!apiKey || isSaving}
           onClick={() => {
             onSave(apiKey, isActive);
-            setApiKey("");
           }}
         >
           {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -205,15 +209,23 @@ export default function AdminPanel() {
   const [testingProvider, setTestingProvider] = useState<ProviderId | null>(null);
   const [savingProvider, setSavingProvider] = useState<ProviderId | null>(null);
 
+  // Per-provider clear callbacks — registered by each ProviderRow via registerClear prop
+  const clearCallbacks = useRef<Partial<Record<ProviderId, () => void>>>({});
+  const registerClear = useCallback((provider: ProviderId) => (fn: () => void) => {
+    clearCallbacks.current[provider] = fn;
+  }, []);
+
   const setKey = trpc.admin.ai.setProviderKey.useMutation({
     onSuccess: (_data, variables) => {
       toast.success(t("admin.ai.keySaved"));
       setSavingProvider(null);
       refetchConfigs();
+      clearCallbacks.current[variables.provider as ProviderId]?.();
     },
     onError: (err) => {
       toast.error(err.message);
       setSavingProvider(null);
+      // Leave input intact so user can retry
     },
   });
 
@@ -312,6 +324,7 @@ export default function AdminPanel() {
                             setKey.mutate({ provider, apiKey, isActive });
                           }}
                           onTest={() => handleTestProvider(provider)}
+                          registerClear={registerClear(provider)}
                         />
                       );
                     })}

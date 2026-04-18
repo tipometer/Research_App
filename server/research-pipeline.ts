@@ -4,6 +4,7 @@
  */
 import type { Request, Response } from "express";
 import { runPhase1, runPhase2, runPhase3, runPhase4Stream } from "./ai/pipeline-phases";
+import { PipelineStreamError } from "./ai/fallback";
 import {
   getResearchById,
   updateResearch,
@@ -201,27 +202,28 @@ export async function runResearchPipeline(req: Request, res: Response) {
     sendEvent(res, { type: "phase_complete", phase: currentPhase, durationMs: phase4Duration, sourcesFound: 0, summary: synth.verdictReason });
     if (db) await db.insert(researchPhases).values({ researchId, phase: "synthesis", status: "done", summary: synth.verdictReason, durationMs: phase4Duration, sourcesFound: 0 });
 
-    // Persist sources
+    // Step A: parallel source persist (one promise per insert, swallow individual failures)
     if (db && allSources.length > 0) {
-      for (const src of allSources) {
-        try {
-          await db.insert(sourcesTable).values({
-            researchId,
-            url: src.url,
-            title: src.title,
-            snippet: src.snippet,
-            sourceType: (["academic", "industry", "news", "blog", "community"].includes(src.sourceType) ? src.sourceType : "blog") as any,
-            publishedAt: src.publishedAt,
-            relevanceScore: "0.75",
-          });
-        } catch (err: any) {
+      const insertPromises = allSources.map((src) =>
+        db.insert(sourcesTable).values({
+          researchId,
+          url: src.url,
+          title: src.title,
+          snippet: src.snippet,
+          sourceType: (["academic", "industry", "news", "blog", "community"].includes(src.sourceType) ? src.sourceType : "blog") as any,
+          publishedAt: src.publishedAt,
+          relevanceScore: "0.75",
+        }).catch((err: any) => {
           console.warn(
             `[research-pipeline] Failed to persist source (researchId=${researchId}, url=${src.url}): ${err?.code ?? ""} ${err?.message ?? String(err)}`,
           );
-        }
-      }
+          return null;
+        }),
+      );
+      await Promise.all(insertPromises);
     }
 
+    // Step B: commit status to DB BEFORE emitting pipeline_complete
     await updateResearch(researchId, {
       status: "done",
       verdict: synth.verdict,
@@ -235,6 +237,7 @@ export async function runResearchPipeline(req: Request, res: Response) {
       completedAt: new Date(),
     });
 
+    // Step C: NOW notify client — DB is fully consistent
     sendEvent(res, {
       type: "pipeline_complete",
       verdict: synth.verdict,
@@ -249,8 +252,8 @@ export async function runResearchPipeline(req: Request, res: Response) {
     console.error("[Pipeline] Error:", error);
     const message = error?.message ?? "Ismeretlen hiba";
     const retriable = !message.includes("timed out") && !message.includes("No API key");
-    // Read wasStreaming from error property (set by runPhase4Stream on mid-stream errors)
-    const wasStreaming = (error as any).wasStreaming === true;
+    // Check if the error was thrown mid-stream (after partials were yielded)
+    const wasStreaming = error instanceof PipelineStreamError;
     sendEvent(res, { type: "pipeline_error", phase: currentPhase, message, retriable, wasStreaming });
     await updateResearch(researchId, { status: "failed", errorMessage: message });
     await addCredit(userId, research.creditsUsed, "Automatikus visszatérítés — sikertelen kutatás");

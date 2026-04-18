@@ -2,6 +2,27 @@ import { APICallError } from "ai";
 import { z } from "zod";
 import type { Phase } from "./router";
 
+/**
+ * Marker error thrown by runPhase4Stream when a synthesis stream error occurs
+ * AFTER the first partial has been yielded (mid-stream). Research-pipeline's
+ * catch block checks `instanceof PipelineStreamError` to decide whether to
+ * preserve the partial markdown in the error UI (vs. showing an empty state
+ * for pre-stream failures).
+ *
+ * Wraps the original provider/network error as `cause`. The original error's
+ * message is preserved; stack trace is appended.
+ */
+export class PipelineStreamError extends Error {
+  readonly wasStreaming = true as const;
+
+  constructor(cause: unknown) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(causeMessage);
+    this.name = "PipelineStreamError";
+    this.cause = cause;
+  }
+}
+
 export interface FallbackContext {
   phase: Phase;
   onFallback?: (reason: string) => void;
@@ -14,6 +35,12 @@ export function isFallbackEligible(err: unknown): boolean {
     if (code !== undefined && code < 500 && code !== 429) return false;
     return true;
   }
+  // Programming errors are code bugs — fallback can't fix them, would just double-latency.
+  if (err instanceof TypeError || err instanceof ReferenceError || err instanceof RangeError) {
+    console.warn(`[fallback] Code bug suspected (${err.name}: ${err.message}). Not attempting fallback.`);
+    return false;
+  }
+  // Generic Error / AbortError / network / timeout / unknown throw → eligible (transient assumption)
   return true;
 }
 

@@ -18,18 +18,18 @@ const ALL_DELIMITER_TOKENS = [
 const STRIP_REGEX = /\x1b\[[0-9;]*[a-zA-Z]|[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
 
 const INJECTION_KEYWORDS: RegExp[] = [
-  /\bignore\s+(previous|prior|above|all)\s+(instructions?|rules?|prompts?)\b/i,
-  /\b(system|assistant|user)\s*[:>]\s*/i,
-  /###\s*SYSTEM\s*###/i,
-  /<(user_input|system_prompt|grounded_content|admin_system_prompt)\b[^>]*>.*?<\/\1\s*>/i,
-  /<\/?(user_input|system_prompt|grounded_content|admin_system_prompt)\b[^>]*>/i,
-  /\bnew\s+task\s*:\s*/i,
-  /\bforget\s+(everything|all|previous)\b/i,
-  /\bact\s+as\s+(a\s+)?(?:different|new|another)\b/i,
-  /\byou\s+are\s+now\s+/i,
-  /\bpretend\s+(you\s+are|to\s+be)\b/i,
-  /\bjailbreak\b/i,
-  /\bDAN\b/,
+  /\bignore\s+(previous|prior|above|all)\s+(instructions?|rules?|prompts?)\b/gi,
+  /\b(system|assistant|user)\s*[:>]\s*/gi,
+  /###\s*SYSTEM\s*###/gi,
+  /<(user_input|system_prompt|grounded_content|admin_system_prompt)\b[^>]*>.*?<\/\1\s*>/gi,
+  /<\/?(user_input|system_prompt|grounded_content|admin_system_prompt)\b[^>]*>/gi,
+  /\bnew\s+task\s*:\s*/gi,
+  /\bforget\s+(everything|all|previous)\b/gi,
+  /\bact\s+as\s+(a\s+)?(?:different|new|another)\b/gi,
+  /\byou\s+are\s+now\s+/gi,
+  /\bpretend\s+(you\s+are|to\s+be)\b/gi,
+  /\bjailbreak\b/gi,
+  /\bDAN\b/g,
 ];
 
 export interface SanitizeContext {
@@ -48,9 +48,10 @@ export function sanitizeUserInput(raw: string, ctx: SanitizeContext): string {
 
   // Strip injection keywords first, which includes delimiter-like patterns
   for (const pattern of INJECTION_KEYWORDS) {
-    if (pattern.test(cleaned)) {
-      console.warn(`[sanitize] ${ctx.field} matched pattern ${pattern.source}. userId=${ctx.userId ?? "anon"}. Snippet: ${JSON.stringify(cleaned.slice(0, 200))}`);
-      cleaned = cleaned.replace(pattern, "");
+    const before = cleaned;
+    cleaned = cleaned.replace(pattern, "");
+    if (cleaned !== before) {
+      console.warn(`[sanitize] ${ctx.field} matched pattern ${pattern.source}. userId=${ctx.userId ?? "anon"}. Snippet: ${JSON.stringify(before.slice(0, 200))}`);
     }
   }
 
