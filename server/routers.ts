@@ -32,6 +32,10 @@ import { aiConfigs, modelRouting } from "../drizzle/schema";
 import { generateText } from "ai";
 import { nanoid } from "nanoid";
 
+// In-memory rate limit for admin.ai.testProvider — 10s cooldown per (userId, provider)
+const testProviderCooldown = new Map<string, number>();
+const TEST_PROVIDER_COOLDOWN_MS = 10_000;
+
 // ─── Admin procedure ──────────────────────────────────────────────────────────
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -311,7 +315,16 @@ export const appRouter = router({
         .input(z.object({
           provider: z.enum(["openai", "anthropic", "gemini"]),
         }))
-        .mutation(async ({ input }) => {
+        .mutation(async ({ input, ctx }) => {
+          const cooldownKey = `${ctx.user.id}:${input.provider}`;
+          const lastCall = testProviderCooldown.get(cooldownKey);
+          const now = Date.now();
+          if (lastCall && now - lastCall < TEST_PROVIDER_COOLDOWN_MS) {
+            const remainingSec = Math.ceil((TEST_PROVIDER_COOLDOWN_MS - (now - lastCall)) / 1000);
+            return { ok: false, error: `Rate limited — please wait ${remainingSec}s before testing ${input.provider} again.` };
+          }
+          testProviderCooldown.set(cooldownKey, now);
+
           const db = await getDb();
           if (!db) return { ok: false, error: "No DB connection" };
           const rows = await db.select().from(aiConfigs).where(eq(aiConfigs.provider, input.provider)).limit(1);

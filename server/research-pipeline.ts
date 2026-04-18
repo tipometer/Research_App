@@ -176,8 +176,10 @@ export async function runResearchPipeline(req: Request, res: Response) {
             publishedAt: src.publishedAt,
             relevanceScore: "0.75",
           });
-        } catch {
-          // duplicate URL or schema mismatch — skip individual row
+        } catch (err: any) {
+          console.warn(
+            `[research-pipeline] Failed to persist source (researchId=${researchId}, url=${src.url}): ${err?.code ?? ""} ${err?.message ?? String(err)}`,
+          );
         }
       }
     }

@@ -9,53 +9,61 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { ArrowRight, Bookmark, Loader2, RefreshCw, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
 
-const MOCK_IDEAS = [
-  { id: 1, title: "Beer & Dumbbell Coach", desc: "Kalóriaszámláló hedonistáknak, akik nem akarnak lemondani az alkoholról.", score: 8.2, saved: false },
-  { id: 2, title: "Craft Beer Sommelier AI", desc: "AI-alapú sörpárosítás étkezésekhez és alkalmakhoz.", score: 7.5, saved: false },
-  { id: 3, title: "Sober Curious Tracker", desc: "Alkoholmentes időszakok gamifikált követése.", score: 7.1, saved: false },
-  { id: 4, title: "Gym Buddy Finder", desc: "Edzőtárs kereső app fitnesz célok alapján.", score: 6.8, saved: false },
-  { id: 5, title: "Macro Meal Planner", desc: "Makró-alapú étkezéstervező sportolóknak.", score: 7.9, saved: false },
-  { id: 6, title: "Recovery Coach", desc: "Regeneráció optimalizáló app HRV és alvás alapján.", score: 8.0, saved: false },
-  { id: 7, title: "Social Fitness Challenges", desc: "Csoportos fitnesz kihívások közösségi elemekkel.", score: 6.5, saved: false },
-  { id: 8, title: "Supplement Stack Optimizer", desc: "AI-alapú táplálékkiegészítő kombinációk személyre szabva.", score: 7.3, saved: false },
-  { id: 9, title: "Gym Equipment Marketplace", desc: "Használt fitnesz eszközök adásvételi platformja.", score: 6.2, saved: false },
-  { id: 10, title: "Mindful Gains Journal", desc: "Mentális egészség + fitnesz napló sportolóknak.", score: 7.7, saved: false },
-];
+// New BrainstormSchema shape (post-C1): { id: string (kebab-case), title: string, description: string }
+type BrainstormIdea = {
+  id: string;
+  title: string;
+  description: string;
+  saved: boolean;
+};
 
 export default function Brainstorm() {
   const { t } = useTranslation();
   const [, navigate] = useLocation();
   const [context, setContext] = useState("");
-  const [ideas, setIdeas] = useState<typeof MOCK_IDEAS | null>(null);
-  const [savedIdeas, setSavedIdeas] = useState<typeof MOCK_IDEAS>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [ideas, setIdeas] = useState<BrainstormIdea[] | null>(null);
+  const [savedIdeas, setSavedIdeas] = useState<BrainstormIdea[]>([]);
   const [refinement, setRefinement] = useState("");
 
-  const handleGenerate = async () => {
+  const generateMutation = trpc.brainstorm.generate.useMutation({
+    onSuccess: (data) => {
+      setIdeas(data.ideas.map((idea) => ({ ...idea, saved: false })));
+      toast.success("10 ötlet generálva!");
+    },
+    onError: (err) => {
+      toast.error(err.message ?? "Hiba a generálás során.");
+    },
+  });
+
+  const refineMutation = trpc.brainstorm.generate.useMutation({
+    onSuccess: (data) => {
+      setIdeas(data.ideas.map((idea) => ({ ...idea, saved: false })));
+      setRefinement("");
+      toast.success("Ötletek finomítva!");
+    },
+    onError: (err) => {
+      toast.error(err.message ?? "Hiba a finomítás során.");
+    },
+  });
+
+  const isLoading = generateMutation.isPending || refineMutation.isPending;
+
+  const handleGenerate = () => {
     if (!context.trim()) {
       toast.error("Adj meg egy kontextust a brainstormhoz!");
       return;
     }
-    setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 1800));
-    setIdeas(MOCK_IDEAS);
-    setIsLoading(false);
-    toast.success("10 ötlet generálva!");
+    generateMutation.mutate({ context });
   };
 
-  const handleRefine = async () => {
+  const handleRefine = () => {
     if (!refinement.trim()) return;
-    setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 1500));
-    // Shuffle and slightly modify
-    setIdeas([...MOCK_IDEAS].sort(() => Math.random() - 0.5).slice(0, 10));
-    setRefinement("");
-    setIsLoading(false);
-    toast.success("Ötletek finomítva!");
+    refineMutation.mutate({ context, refinement });
   };
 
-  const toggleSave = (id: number) => {
+  const toggleSave = (id: string) => {
     setIdeas((prev) =>
       prev?.map((idea) => idea.id === id ? { ...idea, saved: !idea.saved } : idea) ?? null
     );
@@ -146,20 +154,17 @@ export default function Brainstorm() {
                   <CardContent className="pt-4 pb-4">
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <h3 className="font-semibold text-sm leading-tight">{idea.title}</h3>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <span className="text-xs font-bold text-primary">{idea.score}</span>
-                        <button
-                          onClick={() => toggleSave(idea.id)}
-                          className={cn(
-                            "p-1 rounded transition-colors",
-                            idea.saved ? "text-primary" : "text-muted-foreground hover:text-primary"
-                          )}
-                        >
-                          <Bookmark className={cn("w-4 h-4", idea.saved && "fill-current")} />
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => toggleSave(idea.id)}
+                        className={cn(
+                          "p-1 rounded transition-colors flex-shrink-0",
+                          idea.saved ? "text-primary" : "text-muted-foreground hover:text-primary"
+                        )}
+                      >
+                        <Bookmark className={cn("w-4 h-4", idea.saved && "fill-current")} />
+                      </button>
                     </div>
-                    <p className="text-xs text-muted-foreground mb-3 leading-relaxed">{idea.desc}</p>
+                    <p className="text-xs text-muted-foreground mb-3 leading-relaxed">{idea.description}</p>
                     <Button
                       size="sm"
                       variant="outline"

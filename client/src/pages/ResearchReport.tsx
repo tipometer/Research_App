@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslation } from "react-i18next";
 import { useParams } from "wouter";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import {
@@ -92,6 +92,11 @@ function RadarScore({ scores }: { scores: Scores }) {
   );
 }
 
+// Questions stored in DB come from PollingSchema: { id: string, type, text, options }
+// We only care about id + text for the editor UI; other fields are preserved but not shown.
+type DbQuestion = { id: string; type: string; text: string; options: string[] | null };
+type LocalQuestion = { id: string; text: string };
+
 export default function ResearchReport() {
   const { t } = useTranslation();
   const params = useParams<{ id: string }>();
@@ -100,16 +105,49 @@ export default function ResearchReport() {
     { id },
     { enabled: !Number.isNaN(id) && id > 0 },
   );
-  const [responseCount] = useState(23);
-  const [surveyQuestions, setSurveyQuestions] = useState([
-    { id: 1, text: "Mennyi pénzt költenél havonta egy ilyen alkalmazásra?", editing: false },
-    { id: 2, text: "Milyen platformon használnád legszívesebben? (iOS / Android / Web)", editing: false },
-    { id: 3, text: "Mi a legnagyobb problémád a jelenlegi kalóriaszámláló alkalmazásokkal?", editing: false },
-    { id: 4, text: "Ajánlanád-e ismerőseidnek? Mi lenne a fő érv?", editing: false },
-  ]);
-  const [surveyActive, setSurveyActive] = useState(false);
-  const [editingQuestion, setEditingQuestion] = useState<number | null>(null);
+
+  // ── Survey wiring ──────────────────────────────────────────────────────────
+  const {
+    data: surveyData,
+    isLoading: surveyLoading,
+    refetch: refetchSurvey,
+  } = trpc.survey.getByResearch.useQuery(
+    { researchId: id },
+    { enabled: !Number.isNaN(id) && id > 0 && research?.status === "done" },
+  );
+
+  const createSurveyMutation = trpc.survey.create.useMutation({
+    onSuccess: () => {
+      void refetchSurvey();
+      toast.success("Kérdőív létrehozva és aktiválva!");
+    },
+    onError: (err) => {
+      toast.error(err.message ?? "Hiba a kérdőív létrehozásakor.");
+    },
+  });
+
+  // Derive survey state from backend data
+  const surveyActive = !!surveyData;
+  const responseCount = surveyData?.responseCount ?? 0;
+  const surveyToken = surveyData?.token ?? null;
+  // DB questions cast from json — shape is PollingSchema.questions items
+  const dbQuestions: DbQuestion[] = Array.isArray(surveyData?.questions)
+    ? (surveyData.questions as DbQuestion[])
+    : [];
+
+  // Local editable copy (only used when survey is active and questions are loaded)
+  const [localQuestions, setLocalQuestions] = useState<LocalQuestion[]>([]);
+  const [questionsInitialised, setQuestionsInitialised] = useState(false);
+  const [editingQuestion, setEditingQuestion] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+
+  // Seed localQuestions from DB once when survey loads (keeps edits stable across re-renders)
+  useEffect(() => {
+    if (dbQuestions.length > 0 && !questionsInitialised) {
+      setLocalQuestions(dbQuestions.map((q) => ({ id: q.id, text: q.text })));
+      setQuestionsInitialised(true);
+    }
+  }, [dbQuestions, questionsInitialised]);
 
   if (isLoading) {
     return (
@@ -354,8 +392,8 @@ export default function ResearchReport() {
                       size="sm"
                       className="gap-1 text-xs"
                       onClick={() => {
-                        const newQ = { id: Date.now(), text: "Új kérdés...", editing: false };
-                        setSurveyQuestions([...surveyQuestions, newQ]);
+                        const newQ: LocalQuestion = { id: `local-${Date.now()}`, text: "Új kérdés..." };
+                        setLocalQuestions([...localQuestions, newQ]);
                         setEditingQuestion(newQ.id);
                         setEditText(newQ.text);
                       }}
@@ -367,7 +405,7 @@ export default function ResearchReport() {
                   <p className="text-xs text-muted-foreground">Szerkeszd a kérdéseket a kérdőív aktivitása előtt.</p>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  {surveyQuestions.map((q, i) => (
+                  {localQuestions.map((q, i) => (
                     <div key={q.id} className="flex items-start gap-2 p-3 rounded-lg border border-border bg-muted/20 group">
                       <span className="w-6 h-6 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 text-xs flex items-center justify-center flex-shrink-0 mt-0.5 font-bold">{i + 1}</span>
                       {editingQuestion === q.id ? (
@@ -379,13 +417,13 @@ export default function ResearchReport() {
                             onChange={(e) => setEditText(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
-                                setSurveyQuestions(surveyQuestions.map(sq => sq.id === q.id ? { ...sq, text: editText } : sq));
+                                setLocalQuestions(localQuestions.map(sq => sq.id === q.id ? { ...sq, text: editText } : sq));
                                 setEditingQuestion(null);
                               }
                             }}
                           />
                           <Button size="sm" variant="ghost" className="p-1 h-auto" onClick={() => {
-                            setSurveyQuestions(surveyQuestions.map(sq => sq.id === q.id ? { ...sq, text: editText } : sq));
+                            setLocalQuestions(localQuestions.map(sq => sq.id === q.id ? { ...sq, text: editText } : sq));
                             setEditingQuestion(null);
                           }}>
                             <CheckCircle2 className="w-4 h-4 text-green-500" />
@@ -398,7 +436,7 @@ export default function ResearchReport() {
                             <Button size="sm" variant="ghost" className="p-1 h-auto" onClick={() => { setEditingQuestion(q.id); setEditText(q.text); }}>
                               <Edit3 className="w-3 h-3" />
                             </Button>
-                            <Button size="sm" variant="ghost" className="p-1 h-auto text-destructive" onClick={() => setSurveyQuestions(surveyQuestions.filter(sq => sq.id !== q.id))}>
+                            <Button size="sm" variant="ghost" className="p-1 h-auto text-destructive" onClick={() => setLocalQuestions(localQuestions.filter(sq => sq.id !== q.id))}>
                               <Trash2 className="w-3 h-3" />
                             </Button>
                           </div>
@@ -418,9 +456,13 @@ export default function ResearchReport() {
                         <p className="font-medium text-sm">Kérdőív aktivitálása</p>
                         <p className="text-xs text-muted-foreground mt-0.5">Publikus link generálása és válaszgyűjtés indítása</p>
                       </div>
-                      <Button className="gap-2" onClick={() => setSurveyActive(true)}>
+                      <Button
+                        className="gap-2"
+                        disabled={createSurveyMutation.isPending}
+                        onClick={() => createSurveyMutation.mutate({ researchId: id })}
+                      >
                         <MessageSquare className="w-4 h-4" />
-                        Kérdőív indítása
+                        {createSurveyMutation.isPending ? "Generálás..." : "Kérdőív indítása"}
                       </Button>
                     </div>
                   </CardContent>
