@@ -170,7 +170,9 @@ export function isFallbackEligible(err: unknown): boolean {
 ```typescript
 export interface FallbackContext {
   phase: Phase;
-  onFallback?: (fallbackModel: string, reason: string) => void;
+  // Signature takes only `reason` — the caller's closure has the fallback model name already.
+  // This avoids passing a placeholder string through executeWithFallback.
+  onFallback?: (reason: string) => void;
 }
 
 export async function executeWithFallback<T>(
@@ -188,8 +190,7 @@ export async function executeWithFallback<T>(
     console.warn(`[fallback] ${ctx.phase} primary failed (${reason}). Attempting fallback.`);
     try {
       const result = await fallback();
-      // Note: fallback model name is passed via the caller's closure (bound in maybeBuildFallback)
-      ctx.onFallback?.(/* model name — caller injects */, reason);
+      ctx.onFallback?.(reason);  // caller's closure already bound fallback model name
       return result;
     } catch (fallbackErr) {
       console.error(`[fallback] ${ctx.phase} fallback also failed:`, fallbackErr);
@@ -286,7 +287,9 @@ export async function runPhase1(
     fallbackCall,
     {
       phase: "wide_scan",
-      onFallback: (_, reason) => options.onFallback?.(fallback!.model, reason),
+      // The fallback model name is bound here in the closure — the executeWithFallback
+      // layer doesn't need to know about model identity, only that fallback was used.
+      onFallback: (reason) => options.onFallback?.(fallback!.model, reason),
     },
   );
 }
@@ -427,17 +430,27 @@ export function sanitizeUserInput(raw: string, ctx: SanitizeContext): string {
 ### 5.4 `wrapIndirect(content, kind)`
 
 ```typescript
+// FOREIGN_DELIMITER_TOKENS — all delimiter open/close tags EXCEPT self; stripped from
+// indirect content so it cannot escape into OR masquerade as a higher-trust context.
+// Example: grounded snippet containing "<admin_system_prompt>" would otherwise appear
+// to the model as an admin-trust block, bypassing the user_input boundary too.
+const ALL_DELIMITER_TOKENS = [
+  "<user_input>", "</user_input>",
+  "<admin_system_prompt>", "</admin_system_prompt>",
+  "<phase_summary>", "</phase_summary>",
+  "<grounded_snippet>", "</grounded_snippet>",
+];
+
 export function wrapIndirect(content: string, kind: "summary" | "snippet"): string {
   const [open, close] = kind === "summary" ? DELIMS.phase_summary : DELIMS.grounded_snippet;
-  // Cross-delimiter escape prevention:
-  // 1. Self-delimiter collision
-  // 2. <user_input> cross-escape attempt (grounded snippet nem szökhet ki user_input-ba)
-  const cleaned = content
-    .replaceAll(open, "")
-    .replaceAll(close, "")
-    .replaceAll("<user_input>", "")
-    .replaceAll("</user_input>", "");
-  // NO keyword strip — indirect content már-látott, strip utólag cross-reference mismatch-et okozna
+  // Strip ALL delimiter tokens from content (both self and foreign) — prevents any
+  // cross-escape between the 4 trust zones (user / admin / summary / snippet)
+  let cleaned = content;
+  for (const token of ALL_DELIMITER_TOKENS) {
+    cleaned = cleaned.replaceAll(token, "");
+  }
+  // NO keyword strip — indirect content already processed by previous phase;
+  // stripping now would cause cross-reference mismatches ("the summary says X" but cleaned version doesn't have X).
   return `${open}\n${cleaned}\n${close}`;
 }
 ```
@@ -502,6 +515,13 @@ const SECURITY_INSTRUCTION = `
 | grounded source title | Gemini groundingMetadata | `escapeTitle` | same |
 | grounded source URL | Gemini groundingMetadata | `escapeUrl` | same |
 
+**Ami NEM szorul sanitization-re** (explicit closure):
+- `strategy` enum (`"gaps" | "predator" | "provisioning"`) — Zod-validált, controlled értékkészlet, direkt stringinterpoláció biztonságos
+- Numerikus fieldek (scores, durations, responseCount) — típusrendszer garantálja
+- User email / displayName — jelenleg NEM kerülnek be LLM promptokba (sem phase system promptokba, sem audit log-on kívül). Ha V2-ben bekerülnének (pl. "generated for user X"), külön sanitize kell
+
+Más user-derived string NEM folyik LLM promptokba — mátrix lezárva.
+
 ---
 
 ## 6. Admin UI változások
@@ -563,6 +583,11 @@ type SseEvent =
 **`groundingLost` flag:**
 - `true` ha a phase grounded volt (fázis 1-3) ÉS a fallback egy másik provider (pl. Gemini → OpenAI) vagy ugyanaz provider de non-grounded fallback (C2a-ban mindig non-grounded a fallback)
 - `false` egyéb esetekben
+
+**`wasStreaming` flag** (a `pipeline_error` event-en):
+- `true` ha a hiba a Synthesis (fázis 4) fázisban a `for await` loop közben történt (mid-stream) — a `streamStarted` flag már `true` volt, tehát partialok már kiment a kliensre
+- `false` vagy undefined egyéb fázisoknál vagy pre-stream synthesis failnél
+- **Kliensoldali UX különbség**: ha `wasStreaming: true`, az error card másik üzenetet mutat — "A kutatás megszakadt a Synthesis közben. A részleges riport megtartva a képernyőn. Újrapróbálás indít új generálást." (megőrzi a részleges markdown-t megjelenítve, szemben az "üres report" renderrel pre-stream fail esetén)
 
 ### 7.2 Kliensoldali `ResearchProgress.tsx` integráció
 
@@ -647,7 +672,7 @@ Super-admin monitorozható: per-fázis / per-provider fallback gyakoriság, cros
 
 | Modul | Új tesztek | Lefedi |
 |---|---|---|
-| `fallback.test.ts` | 14 | `isFallbackEligible` (8 esetcsoport: ZodError, 500/502/503, 429, 401/400/403/404, undefined statusCode, generic Error, AbortError) + `executeWithFallback` (6 eset: primary ok, eligible fallback, non-eligible primary, null fallback, fallback fail, fallback error propagated) |
+| `fallback.test.ts` | 14 | `isFallbackEligible` (8 külön `it()` blokk: ZodError → true; APICallError 503 → true; 429 → true; 401 → false; 400 → false; 403 → false; **404 → false** (explicit); undefined statusCode → true) + `executeWithFallback` (6 külön `it()` blokk: primary ok path; eligible error → fallback ok; non-eligible error → rethrow; null fallback → rethrow original; fallback eligible but also fails → fallback err rethrown; onFallback callback invoked). Összes: **14 `it()` blokk**, teljes esetcsoporttal. |
 | `sanitize.test.ts` | 20 | `sanitizeUserInput` (control strip, each of 11 regex patterns, false-positive guards, WARN log emission, delimiter wrap format) + `wrapIndirect` (summary + snippet wrap, self-delimiter collision, cross-delimiter escape, keyword preservation) + `escapeTitle` / `escapeUrl` (HTML entities, protocol validation, javascript:/data:/file: rejection, malformed URL) |
 | `router.test.ts` | +4 | `resolvePhaseWithFallback` (no fallback configured → null; same-provider fallback → 1× apiKey lookup; cross-provider fallback → 2× apiKey lookups; fallback misconfigured → falls back to null + warn log) |
 | `pipeline-phases.test.ts` | +8 | `runPhase1` fallback path (503 → fallback success); `runPhase1` no-fallback (401 → rethrow); `runPhase1` both-fail (503 primary + 503 fallback → fallback error); `runPhase4Stream` pre-stream fallback (APICallError on streamText → generateText fallback); `runPhase4Stream` mid-stream fail (streamStarted=true → no fallback); `runPhase4Stream` both fail; `runPolling` + `runBrainstorm` fallback |
