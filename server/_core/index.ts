@@ -1,4 +1,10 @@
-import "dotenv/config";
+// Load env in priority order: .env first (baseline defaults), then .env.local
+// (local overrides, e.g., dev API keys and MASTER_ENCRYPTION_KEY). .env.local is
+// gitignored; its values override .env. This mirrors the Next.js / Vite convention.
+import dotenv from "dotenv";
+dotenv.config({ path: ".env" });
+dotenv.config({ path: ".env.local", override: true });
+
 import express from "express";
 import { createServer } from "http";
 import net from "net";
