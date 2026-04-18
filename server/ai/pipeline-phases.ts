@@ -3,7 +3,8 @@ import { google } from "@ai-sdk/google";
 import { z } from "zod";
 import { resolvePhaseWithFallback, type Phase } from "./router";
 import { getProvider } from "./providers";
-import { executeWithFallback, isFallbackEligible } from "./fallback";
+import { executeWithFallback, isFallbackEligible, PipelineStreamError } from "./fallback";
+import { parseJsonResponse } from "./parse-json-response";
 import { sanitizeUserInput, wrapIndirect } from "./sanitize";
 import { extractSources, type ExtractedSource, type GroundingMetadata } from "./grounding";
 import {
@@ -78,11 +79,7 @@ async function invokeGrounded<TSchema extends z.ZodSchema>(
   }
 
   function parseAndValidate(raw: string): z.infer<TSchema> {
-    // Strip any markdown fences or surrounding prose if the model adds them
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    const jsonText = jsonMatch ? jsonMatch[0] : raw;
-    const parsed = JSON.parse(jsonText);
-    return schema.parse(parsed);
+    return parseJsonResponse(raw, schema);
   }
 
   let rawResult: Awaited<ReturnType<typeof oneCall>>;
@@ -161,13 +158,10 @@ async function invokeNonGroundedFallback<TSchema extends z.ZodSchema>(
     messages: messagesWithJsonHint,
     abortSignal: options.abortSignal,
   });
-  const jsonMatch = rawResult.text.match(/\{[\s\S]*\}/);
-  const jsonText = jsonMatch ? jsonMatch[0] : rawResult.text;
-  const parsed = schema.parse(JSON.parse(jsonText));
   // Note: no Zod retry here — fallback path is intentionally one-shot (executeWithFallback design).
   // If the fallback response fails Zod parse, the error propagates directly (user-visible fail).
   // No groundingMetadata available → empty sources (fallback is non-grounded by design).
-  return { data: parsed, sources: [] };
+  return { data: parseJsonResponse(rawResult.text, schema), sources: [] };
 }
 
 export async function runPhase1(
@@ -417,11 +411,9 @@ Return JSON with verdict, synthesisScore, scores, reportMarkdown (min 4000 chars
     return clampScores(SynthesisSchema.parse(final));
 
   } catch (err) {
-    // Mid-stream error → tag with wasStreaming, rethrow (no fallback, user already saw partials)
+    // Mid-stream error → wrap in PipelineStreamError, rethrow (no fallback, user already saw partials)
     if (streamStarted) {
-      const e = err as any;
-      e.wasStreaming = true;
-      throw e;
+      throw new PipelineStreamError(err);
     }
 
     // Pre-stream error paths below: wasStreaming stays unset (= false in SSE event)

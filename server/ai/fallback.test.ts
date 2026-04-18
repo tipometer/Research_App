@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { APICallError } from "ai";
 import { z } from "zod";
-import { isFallbackEligible, executeWithFallback } from "./fallback";
+import { isFallbackEligible, executeWithFallback, PipelineStreamError } from "./fallback";
 
 const makeApiError = (statusCode: number | undefined) => new APICallError({
   message: "test",
@@ -114,5 +114,28 @@ describe("executeWithFallback", () => {
     ).rejects.toThrow("fallback-fail");
     // onFallback must fire BEFORE fallback is called
     expect(order).toEqual(["onFallback-fired", "fallback-called"]);
+  });
+});
+
+describe("PipelineStreamError", () => {
+  it("has wasStreaming: true readonly field", () => {
+    const inner = new Error("stream drop");
+    const err = new PipelineStreamError(inner);
+    expect(err.wasStreaming).toBe(true);
+    expect(err instanceof PipelineStreamError).toBe(true);
+    expect(err instanceof Error).toBe(true);
+  });
+
+  it("preserves the original error as .cause", () => {
+    const inner = new Error("network dropped");
+    const err = new PipelineStreamError(inner);
+    expect(err.cause).toBe(inner);
+    expect(err.message).toBe("network dropped");
+  });
+
+  it("handles non-Error cause", () => {
+    const err = new PipelineStreamError("raw string reason");
+    expect(err.cause).toBe("raw string reason");
+    expect(err.message).toBe("raw string reason");
   });
 });

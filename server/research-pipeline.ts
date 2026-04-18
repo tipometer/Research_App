@@ -4,6 +4,7 @@
  */
 import type { Request, Response } from "express";
 import { runPhase1, runPhase2, runPhase3, runPhase4Stream } from "./ai/pipeline-phases";
+import { PipelineStreamError } from "./ai/fallback";
 import {
   getResearchById,
   updateResearch,
@@ -249,8 +250,8 @@ export async function runResearchPipeline(req: Request, res: Response) {
     console.error("[Pipeline] Error:", error);
     const message = error?.message ?? "Ismeretlen hiba";
     const retriable = !message.includes("timed out") && !message.includes("No API key");
-    // Read wasStreaming from error property (set by runPhase4Stream on mid-stream errors)
-    const wasStreaming = (error as any).wasStreaming === true;
+    // Check if the error was thrown mid-stream (after partials were yielded)
+    const wasStreaming = error instanceof PipelineStreamError;
     sendEvent(res, { type: "pipeline_error", phase: currentPhase, message, retriable, wasStreaming });
     await updateResearch(researchId, { status: "failed", errorMessage: message });
     await addCredit(userId, research.creditsUsed, "Automatikus visszatérítés — sikertelen kutatás");

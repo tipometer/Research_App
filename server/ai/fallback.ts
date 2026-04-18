@@ -2,6 +2,27 @@ import { APICallError } from "ai";
 import { z } from "zod";
 import type { Phase } from "./router";
 
+/**
+ * Marker error thrown by runPhase4Stream when a synthesis stream error occurs
+ * AFTER the first partial has been yielded (mid-stream). Research-pipeline's
+ * catch block checks `instanceof PipelineStreamError` to decide whether to
+ * preserve the partial markdown in the error UI (vs. showing an empty state
+ * for pre-stream failures).
+ *
+ * Wraps the original provider/network error as `cause`. The original error's
+ * message is preserved; stack trace is appended.
+ */
+export class PipelineStreamError extends Error {
+  readonly wasStreaming = true as const;
+
+  constructor(cause: unknown) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(causeMessage);
+    this.name = "PipelineStreamError";
+    this.cause = cause;
+  }
+}
+
 export interface FallbackContext {
   phase: Phase;
   onFallback?: (reason: string) => void;
