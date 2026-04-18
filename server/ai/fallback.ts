@@ -1,6 +1,7 @@
 import { APICallError } from "ai";
 import { z } from "zod";
 import type { Phase } from "./router";
+import { DecryptionError } from "./crypto";
 
 /**
  * Marker error thrown by runPhase4Stream when a synthesis stream error occurs
@@ -29,6 +30,18 @@ export interface FallbackContext {
 }
 
 export function isFallbackEligible(err: unknown): boolean {
+  if (err instanceof DecryptionError) {
+    // Permanent config error (like 401) — fallback to same-config model can't
+    // fix decryption. Admin intervention required.
+    //
+    // NOTE: log message MUST NOT contain AAD, provider name, or err.cause detail.
+    // Router has its own diagnostic WARN at migration-detect time (see router.ts
+    // decryptIfNeeded) which DOES include AAD — that's dev-only. This one runs
+    // in prod and must stay generic.
+    console.warn(`[fallback] Decryption error — config issue, not a transient fault`);
+    return false;
+  }
+
   if (err instanceof z.ZodError) return true;
   if (err instanceof APICallError) {
     const code = err.statusCode;
