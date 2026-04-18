@@ -144,10 +144,55 @@ describe("crypto — format + version guards", () => {
   });
 
   it("DecryptionError when base64 segment is invalid", () => {
-    // NOTE: Node's Buffer.from("!!!", "base64") does NOT throw — returns garbage buffer.
-    // The actual DecryptionError surfaces at decipher.final() auth-tag check and is
-    // wrapped by the catch block. This test verifies the net behavior, not the
-    // specific guard path.
+    // Node's Buffer.from("!!!", "base64") does NOT throw — it returns a garbage
+    // buffer. The BASE64_RE format-guard now catches this up-front (see
+    // "crypto — base64 sanity check (C2b-fix)" below). This test still asserts
+    // the net behavior: invalid base64 → DecryptionError.
     expect(() => decrypt("ENC1:!!!:ct:tag", key, AAD)).toThrow(DecryptionError);
+  });
+});
+
+describe("crypto — key length guard (C2b-fix)", () => {
+  it("encrypt throws plain Error on wrong-length masterKey", () => {
+    const shortKey = Buffer.alloc(16, 0); // 128 bits instead of 256
+    expect(() => encrypt("hello", shortKey, "aad")).toThrow(/Invalid master key length/);
+    // Plain Error, NOT DecryptionError — programmer error, not ciphertext issue.
+    expect(() => encrypt("hello", shortKey, "aad")).not.toThrow(DecryptionError);
+  });
+
+  it("decrypt throws plain Error on wrong-length masterKey", () => {
+    const shortKey = Buffer.alloc(16, 0);
+    expect(() => decrypt("ENC1:AAA=:BBB=:CCC=", shortKey, "aad")).toThrow(
+      /Invalid master key length/,
+    );
+    expect(() => decrypt("ENC1:AAA=:BBB=:CCC=", shortKey, "aad")).not.toThrow(
+      DecryptionError,
+    );
+  });
+});
+
+describe("crypto — base64 sanity check (C2b-fix)", () => {
+  const key = Buffer.alloc(32, 0);
+
+  it("DecryptionError with specific message for malformed base64 in iv segment", () => {
+    expect(() =>
+      decrypt("ENC1:!!!:AAAA:AAAAAAAAAAAAAAAAAAAAAA==", key, AAD),
+    ).toThrow(/Malformed base64 in iv/);
+  });
+
+  it("DecryptionError with specific message for malformed base64 in ciphertext segment", () => {
+    expect(() =>
+      decrypt(
+        "ENC1:AAAAAAAAAAAAAAAA:!!!:AAAAAAAAAAAAAAAAAAAAAA==",
+        key,
+        AAD,
+      ),
+    ).toThrow(/Malformed base64 in ciphertext/);
+  });
+
+  it("DecryptionError with specific message for malformed base64 in tag segment", () => {
+    expect(() =>
+      decrypt("ENC1:AAAAAAAAAAAAAAAA:AAAA:!!!", key, AAD),
+    ).toThrow(/Malformed base64 in tag/);
   });
 });
