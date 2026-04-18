@@ -81,6 +81,11 @@ export const hu = {
       synthesis: {
         streaming: "A riport valós időben készül...",
       },
+      fallback: {
+        used: "Fázis {{phase}} fallback modellre váltott ({{model}})",
+        multiple: "{{count}} fázis fallback modellre váltott a kutatás során",
+        groundingLost: "Fázis {{phase}} fallback ({{model}}): grounding nem elérhető, források üresek",
+      },
     },
     // Report
     report: {
@@ -176,6 +181,10 @@ export const hu = {
         primaryModel: "Elsődleges Modell",
         fallbackModel: "Tartalék Modell",
         routingSaved: "Routing frissítve",
+        crossProviderWarning: "⚠️ Fallback provider ({{fallback}}) eltér a primary-tól ({{primary}}). A grounding nem lesz elérhető, a források üresek lesznek ezen a fallbacken.",
+        crossProviderConfirmNeeded: "Megerősítés szükséges a cross-provider beállításhoz",
+        confirmCrossProvider: "Megerősítés (cross-provider)",
+        fallbackNone: "Nincs (primary hiba → pipeline fail)",
         phases: {
           wide_scan: "Wide Scan",
           gap_detection: "Gap Detection",

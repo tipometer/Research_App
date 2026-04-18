@@ -70,3 +70,62 @@ export async function resolvePhase(phase: Phase): Promise<{
   const client = getProvider(provider, apiKey);
   return { model, provider, client };
 }
+
+/**
+ * Resolves primary + fallback (model, provider, client) for a given phase.
+ * Performs a single DB lookup to fetch both primaryModel and fallbackModel.
+ * If fallbackModel is not configured or resolution fails, fallback is null.
+ * Used by executeWithFallback (fallback.ts) to implement resilient phase execution.
+ */
+export async function resolvePhaseWithFallback(phase: Phase): Promise<{
+  primary: { model: string; provider: ProviderId; client: ReturnType<typeof getProvider> };
+  fallback: { model: string; provider: ProviderId; client: ReturnType<typeof getProvider> } | null;
+}> {
+  const db = await getDb();
+  let primaryModel: string | undefined;
+  let fallbackModel: string | null | undefined;
+
+  if (db) {
+    const rows = await db
+      .select({ primaryModel: modelRouting.primaryModel, fallbackModel: modelRouting.fallbackModel })
+      .from(modelRouting)
+      .where(eq(modelRouting.phase, phase))
+      .limit(1);
+    if (rows.length > 0) {
+      primaryModel = rows[0].primaryModel;
+      fallbackModel = rows[0].fallbackModel;
+    }
+  }
+
+  // Primary resolution (reuse lookupModel's ENV/hardcoded fallback chain if DB missed)
+  const resolvedPrimaryModel = primaryModel ?? await lookupModel(phase);
+  const primaryProvider = detectProvider(resolvedPrimaryModel);
+  const primaryApiKey = await lookupApiKey(primaryProvider);
+  const primaryClient = getProvider(primaryProvider, primaryApiKey);
+
+  // Fallback resolution (optional)
+  let fallback: {
+    model: string;
+    provider: ProviderId;
+    client: ReturnType<typeof getProvider>;
+  } | null = null;
+  if (fallbackModel) {
+    try {
+      const fbProvider = detectProvider(fallbackModel);
+      const fbApiKey = await lookupApiKey(fbProvider);
+      fallback = {
+        model: fallbackModel,
+        provider: fbProvider,
+        client: getProvider(fbProvider, fbApiKey),
+      };
+    } catch (err) {
+      console.warn(`[router] Fallback for ${phase} misconfigured (${err instanceof Error ? err.message : err}). Proceeding without fallback.`);
+      fallback = null;
+    }
+  }
+
+  return {
+    primary: { model: resolvedPrimaryModel, provider: primaryProvider, client: primaryClient },
+    fallback,
+  };
+}

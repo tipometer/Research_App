@@ -1,6 +1,7 @@
 import { AppLayout } from "@/components/AppLayout";
 import { DogMascot } from "@/components/DogMascot";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { useTranslation } from "react-i18next";
 import { useLocation, useParams } from "wouter";
@@ -8,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, ChevronDown, ChevronUp, Clock, Globe, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Streamdown } from "streamdown";
+import { toast } from "sonner";
 
 type PhaseStatus = "pending" | "running" | "done" | "failed";
 
@@ -19,6 +21,9 @@ interface Phase {
   durationMs: number | null;
   summary: string | null;
   expanded: boolean;
+  fallbackUsed?: boolean;
+  fallbackModel?: string;
+  groundingLost?: boolean;
 }
 
 interface FeedItem {
@@ -48,7 +53,13 @@ export default function ResearchProgress() {
     phase: string | null;
     message: string;
     retriable: boolean;
+    wasStreaming?: boolean;
   } | null>(null);
+  const [fallbackPhases, setFallbackPhases] = useState<Array<{
+    phase: string;
+    model: string;
+    groundingLost: boolean;
+  }>>([]);
   const feedRef = useRef<HTMLDivElement>(null);
   const feedIdRef = useRef(0);
   const esRef = useRef<EventSource | null>(null);
@@ -63,6 +74,13 @@ export default function ResearchProgress() {
 
     const es = new EventSource(`/api/research/${id}/stream`);
     esRef.current = es;
+
+    // Local accumulator for aggregated fallback toast — decoupled from React state
+    // so we can read the authoritative count inside the synchronous SSE handler
+    // (React state updates are async; reading them inside the handler is racy).
+    // This also avoids the anti-pattern of firing toasts from inside a setState callback
+    // (which would double-fire under React Strict Mode).
+    const fallbackAccumulator: Array<{ phase: string; model: string; groundingLost: boolean }> = [];
 
     es.onmessage = (event) => {
       try {
@@ -98,12 +116,44 @@ export default function ResearchProgress() {
             }
             break;
 
-          case "pipeline_complete":
+          case "fallback_used": {
+            const entry = {
+              phase: data.phase,
+              model: data.fallbackModel,
+              groundingLost: data.groundingLost,
+            };
+            // Push to local accumulator for later aggregation (authoritative count)
+            fallbackAccumulator.push(entry);
+            // Also update React state for phase-card badge rendering
+            setFallbackPhases((prev) => [...prev, entry]);
+            setPhases((p) => p.map((ph) =>
+              ph.id === data.phase
+                ? { ...ph, fallbackUsed: true, fallbackModel: data.fallbackModel, groundingLost: data.groundingLost }
+                : ph
+            ));
+            break;  // NO toast here — aggregated at pipeline_complete
+          }
+
+          case "pipeline_complete": {
+            // Aggregated fallback notification — read from local accumulator (sync, authoritative)
+            // This avoids firing toasts from inside a setState callback (React Strict Mode double-fire risk).
+            if (fallbackAccumulator.length === 1) {
+              const fb = fallbackAccumulator[0];
+              const phaseLabel = t(`progress.phases.${fb.phase}`);
+              toast.info(
+                fb.groundingLost
+                  ? t("progress.fallback.groundingLost", { phase: phaseLabel, model: fb.model })
+                  : t("progress.fallback.used", { phase: phaseLabel, model: fb.model })
+              );
+            } else if (fallbackAccumulator.length > 1) {
+              toast.info(t("progress.fallback.multiple", { count: fallbackAccumulator.length }));
+            }
             addFeed(`🎉 Kutatás befejezve! Verdikt: ${data.verdict} — ${data.synthesisScore}/10`, "phase");
             setPhases((p) => p.map((ph) => ph.status === "running" ? { ...ph, status: "done" } : ph));
             setOverallStatus("done");
             setTimeout(() => navigate(`/research/${id}`), 2000);
             break;
+          }
 
           case "pipeline_error":
             addFeed(`❌ Hiba: ${data.message}`, "error");
@@ -112,6 +162,7 @@ export default function ResearchProgress() {
               phase: data.phase ?? null,
               message: data.message,
               retriable: data.retriable ?? false,
+              wasStreaming: data.wasStreaming ?? false,
             });
             setPhases((p) => p.map((ph) => ph.status === "running" ? { ...ph, status: "failed" } : ph));
             es.close();
@@ -208,7 +259,19 @@ export default function ResearchProgress() {
                       {phase.status === "failed" && <XCircle className="w-4 h-4" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm">{phase.label}</p>
+                      <div className="flex items-center flex-wrap gap-1">
+                        <p className="font-medium text-sm">{phase.label}</p>
+                        {phase.fallbackUsed && (
+                          <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
+                            Fallback
+                          </Badge>
+                        )}
+                        {phase.groundingLost && (
+                          <Badge variant="outline" className="text-orange-600 border-orange-400 text-xs">
+                            ⚠ Grounding unavailable
+                          </Badge>
+                        )}
+                      </div>
                       {phase.status === "done" && (
                         <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                           {phase.sourcesFound > 0 && (
@@ -311,6 +374,11 @@ export default function ResearchProgress() {
                   </p>
                 )}
                 <p className="mt-2 text-sm">{error.message}</p>
+                {error.wasStreaming && (
+                  <p className="mt-2 text-sm text-muted-foreground italic">
+                    A részleges riport megtartva a képernyőn. Az újrapróbálás új generálást indít.
+                  </p>
+                )}
                 <p className="mt-2 text-sm text-muted-foreground">
                   {t("progress.error.refunded")}
                 </p>

@@ -20,10 +20,32 @@ type SseEvent =
   | { type: "phase_complete"; phase: string; durationMs: number; sourcesFound: number; summary: string }
   | { type: "synthesis_progress"; partial: unknown }
   | { type: "pipeline_complete"; verdict: string; synthesisScore: number; reportMarkdown: string; scores: Record<string, number> }
-  | { type: "pipeline_error"; phase?: string; message: string; retriable: boolean };
+  | { type: "fallback_used"; phase: string; fallbackModel: string; reason: string; groundingLost: boolean }
+  | { type: "pipeline_error"; phase?: string; message: string; retriable: boolean; wasStreaming?: boolean };
 
 function sendEvent(res: Response, event: SseEvent) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function makeFallbackHandler(phase: string, res: Response, userId: number, researchId: number, req: Request) {
+  return (model: string, reason: string) => {
+    const groundingLost = ["wide_scan", "gap_detection", "deep_dives"].includes(phase);
+    sendEvent(res, {
+      type: "fallback_used",
+      phase,
+      fallbackModel: model,
+      reason,
+      groundingLost,
+    });
+    // Fire-and-forget audit log (don't block pipeline on DB write)
+    logAudit(userId, "research.fallback_used", {
+      researchId,
+      phase,
+      fallbackModel: model,
+      reason,
+      groundingLost,
+    }, req).catch(err => console.error("[audit] fallback_used log failed:", err));
+  };
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -87,7 +109,11 @@ export async function runResearchPipeline(req: Request, res: Response) {
       nicheName: research.nicheName,
       strategy: research.strategy as "gaps" | "predator" | "provisioning",
       description: research.description ?? undefined,
-    }, { abortSignal: makePhaseAbort(currentPhase) });
+    }, {
+      abortSignal: makePhaseAbort(currentPhase),
+      onFallback: makeFallbackHandler("wide_scan", res, userId, researchId, req),
+      userId,
+    });
 
     for (const src of p1.sources) {
       sendEvent(res, { type: "source_found", url: src.url, title: src.title, sourceType: src.sourceType, publishedAt: src.publishedAt });
@@ -107,7 +133,11 @@ export async function runResearchPipeline(req: Request, res: Response) {
       nicheName: research.nicheName,
       strategy: research.strategy as "gaps" | "predator" | "provisioning",
       phase1Summary: p1.data.summary,
-    }, { abortSignal: makePhaseAbort(currentPhase) });
+    }, {
+      abortSignal: makePhaseAbort(currentPhase),
+      onFallback: makeFallbackHandler("gap_detection", res, userId, researchId, req),
+      userId,
+    });
 
     for (const src of p2.sources) {
       sendEvent(res, { type: "source_found", url: src.url, title: src.title, sourceType: src.sourceType, publishedAt: src.publishedAt });
@@ -127,7 +157,11 @@ export async function runResearchPipeline(req: Request, res: Response) {
       nicheName: research.nicheName,
       strategy: research.strategy as "gaps" | "predator" | "provisioning",
       phase2Summary: p2.data.summary,
-    }, { abortSignal: makePhaseAbort(currentPhase) });
+    }, {
+      abortSignal: makePhaseAbort(currentPhase),
+      onFallback: makeFallbackHandler("deep_dives", res, userId, researchId, req),
+      userId,
+    });
 
     for (const src of p3.sources) {
       sendEvent(res, { type: "source_found", url: src.url, title: src.title, sourceType: src.sourceType, publishedAt: src.publishedAt });
@@ -156,7 +190,11 @@ export async function runResearchPipeline(req: Request, res: Response) {
     const synth = await runPhase4Stream(
       { nicheName: research.nicheName, context: synthesisContext },
       (partial) => sendEvent(res, { type: "synthesis_progress", partial }),
-      { abortSignal: makePhaseAbort(currentPhase) },
+      {
+        abortSignal: makePhaseAbort(currentPhase),
+        onFallback: makeFallbackHandler("synthesis", res, userId, researchId, req),
+        userId,
+      },
     );
 
     const phase4Duration = Date.now() - phase4Start;
@@ -211,10 +249,12 @@ export async function runResearchPipeline(req: Request, res: Response) {
     console.error("[Pipeline] Error:", error);
     const message = error?.message ?? "Ismeretlen hiba";
     const retriable = !message.includes("timed out") && !message.includes("No API key");
-    sendEvent(res, { type: "pipeline_error", phase: currentPhase, message, retriable });
+    // Read wasStreaming from error property (set by runPhase4Stream on mid-stream errors)
+    const wasStreaming = (error as any).wasStreaming === true;
+    sendEvent(res, { type: "pipeline_error", phase: currentPhase, message, retriable, wasStreaming });
     await updateResearch(researchId, { status: "failed", errorMessage: message });
     await addCredit(userId, research.creditsUsed, "Automatikus visszatérítés — sikertelen kutatás");
-    await logAudit(userId, "research.failed", { researchId, phase: currentPhase, error: message }, req);
+    await logAudit(userId, "research.failed", { researchId, phase: currentPhase, error: message, wasStreaming }, req);
   } finally {
     res.end();
   }

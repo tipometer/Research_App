@@ -4,8 +4,13 @@ vi.mock("../db", () => ({
   getDb: vi.fn(),
 }));
 
-import { detectProvider, lookupModel, lookupApiKey } from "./router";
+vi.mock("./providers", () => ({
+  getProvider: vi.fn(),
+}));
+
+import { detectProvider, lookupModel, lookupApiKey, resolvePhaseWithFallback } from "./router";
 import { getDb } from "../db";
+import { getProvider } from "./providers";
 
 describe("detectProvider", () => {
   it("returns 'gemini' for gemini-* models", () => {
@@ -110,5 +115,62 @@ describe("lookupApiKey", () => {
       }),
     });
     await expect(lookupApiKey("openai")).rejects.toThrow(/No API key configured/);
+  });
+});
+
+describe("resolvePhaseWithFallback", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+
+  it("returns primary + null fallback when fallbackModel not configured", async () => {
+    (getDb as any).mockResolvedValue({
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ primaryModel: "gemini-2.5-flash", fallbackModel: null }] }) }) }),
+    });
+    process.env.GEMINI_API_KEY = "sk-gem";
+
+    const result = await resolvePhaseWithFallback("wide_scan");
+    expect(result.primary.model).toBe("gemini-2.5-flash");
+    expect(result.primary.provider).toBe("gemini");
+    expect(result.fallback).toBeNull();
+  });
+
+  it("returns both primary and fallback when fallbackModel set (same provider)", async () => {
+    (getDb as any).mockResolvedValue({
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ primaryModel: "gemini-2.5-flash", fallbackModel: "gemini-1.5-pro" }] }) }) }),
+    });
+    process.env.GEMINI_API_KEY = "sk-gem";
+    const result = await resolvePhaseWithFallback("wide_scan");
+    expect(result.primary.model).toBe("gemini-2.5-flash");
+    expect(result.fallback?.model).toBe("gemini-1.5-pro");
+    expect(result.fallback?.provider).toBe("gemini");
+  });
+
+  it("returns cross-provider fallback (Gemini primary → OpenAI fallback)", async () => {
+    (getDb as any).mockResolvedValue({
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ primaryModel: "gemini-2.5-flash", fallbackModel: "gpt-4.1-mini" }] }) }) }),
+    });
+    process.env.GEMINI_API_KEY = "sk-gem";
+    process.env.OPENAI_API_KEY = "sk-openai";
+    const result = await resolvePhaseWithFallback("wide_scan");
+    expect(result.primary.provider).toBe("gemini");
+    expect(result.fallback?.provider).toBe("openai");
+  });
+
+  it("returns fallback: null when fallback lookup fails (missing API key)", async () => {
+    (getDb as any).mockResolvedValue({
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ primaryModel: "gemini-2.5-flash", fallbackModel: "gpt-4.1-mini" }] }) }) }),
+    });
+    process.env.GEMINI_API_KEY = "sk-gem";
+    // OPENAI_API_KEY intentionally NOT set → lookupApiKey throws → fallback resolve catches → null
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await resolvePhaseWithFallback("wide_scan");
+    expect(result.primary.model).toBe("gemini-2.5-flash");
+    expect(result.fallback).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Fallback"));
+    warnSpy.mockRestore();
   });
 });

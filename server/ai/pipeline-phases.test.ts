@@ -1,31 +1,64 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { APICallError } from "ai";
 
 vi.mock("./router", () => ({
   resolvePhase: vi.fn(),
+  resolvePhaseWithFallback: vi.fn(),
 }));
 
 vi.mock("ai", async (orig) => {
   const actual = await orig<typeof import("ai")>();
-  return { ...actual, generateText: vi.fn() };
+  return {
+    ...actual,
+    generateText: vi.fn(),
+    streamText: vi.fn(),
+  };
 });
 
-import { runPhase1, runPhase2, runPhase3 } from "./pipeline-phases";
-import { resolvePhase } from "./router";
-import { generateText } from "ai";
+import { runPhase1, runPhase2, runPhase3, runPhase4Stream, runPolling, runBrainstorm } from "./pipeline-phases";
+import { resolvePhaseWithFallback } from "./router";
+import { generateText, streamText } from "ai";
 
-function mockResolvePhase() {
-  (resolvePhase as any).mockResolvedValue({
-    model: "gemini-2.5-flash",
-    provider: "gemini",
-    client: (_name: string) => ({ /* stub model object */ }),
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const makeApiError = (statusCode: number | undefined) =>
+  new APICallError({
+    message: "test",
+    url: "https://api.test/x",
+    requestBodyValues: {},
+    statusCode,
+  });
+
+function mockResolveNoFallback(model = "gemini-2.5-flash", provider = "gemini") {
+  (resolvePhaseWithFallback as any).mockResolvedValue({
+    primary: { model, provider, client: vi.fn().mockReturnValue({}) },
+    fallback: null,
   });
 }
+
+function mockResolveWithFallback(
+  primaryModel = "gemini-2.5-flash",
+  primaryProvider = "gemini",
+  fallbackModel = "gpt-4.1-mini",
+  fallbackProvider = "openai",
+) {
+  (resolvePhaseWithFallback as any).mockResolvedValue({
+    primary: { model: primaryModel, provider: primaryProvider, client: vi.fn().mockReturnValue({}) },
+    fallback: { model: fallbackModel, provider: fallbackProvider, client: vi.fn().mockReturnValue({}) },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1
+// ---------------------------------------------------------------------------
 
 describe("runPhase1 (Wide Scan)", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("returns parsed output + extracted sources from groundingMetadata", async () => {
-    mockResolvePhase();
+    mockResolveNoFallback();
     (generateText as any).mockResolvedValue({
       text: JSON.stringify({ keywords: ["a", "b", "c"], summary: "x".repeat(60) }),
       providerMetadata: {
@@ -46,7 +79,7 @@ describe("runPhase1 (Wide Scan)", () => {
   });
 
   it("returns empty sources when no grounding metadata", async () => {
-    mockResolvePhase();
+    mockResolveNoFallback();
     (generateText as any).mockResolvedValue({
       text: JSON.stringify({ keywords: ["a", "b", "c"], summary: "x".repeat(60) }),
       providerMetadata: {},
@@ -56,7 +89,7 @@ describe("runPhase1 (Wide Scan)", () => {
   });
 
   it("retries once on Zod validation error", async () => {
-    mockResolvePhase();
+    mockResolveNoFallback();
     (generateText as any)
       .mockResolvedValueOnce({
         text: JSON.stringify({ keywords: ["only-one"], summary: "too short" }), // fails min(3) and min(50)
@@ -72,10 +105,14 @@ describe("runPhase1 (Wide Scan)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Phase 2
+// ---------------------------------------------------------------------------
+
 describe("runPhase2 (Gap Detection)", () => {
   beforeEach(() => vi.clearAllMocks());
   it("returns parsed gaps + competitors + sources", async () => {
-    mockResolvePhase();
+    mockResolveNoFallback();
     (generateText as any).mockResolvedValue({
       text: JSON.stringify({
         gaps: [{ title: "g1", description: "d1" }, { title: "g2", description: "d2" }],
@@ -100,10 +137,14 @@ describe("runPhase2 (Gap Detection)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Phase 3
+// ---------------------------------------------------------------------------
+
 describe("runPhase3 (Deep Dives)", () => {
   beforeEach(() => vi.clearAllMocks());
   it("returns parsed monetization + challenges + sources", async () => {
-    mockResolvePhase();
+    mockResolveNoFallback();
     (generateText as any).mockResolvedValue({
       text: JSON.stringify({
         monetizationModels: [
@@ -125,32 +166,21 @@ describe("runPhase3 (Deep Dives)", () => {
   });
 });
 
-import { runPhase4Stream, runPolling, runBrainstorm } from "./pipeline-phases";
-
-vi.mock("ai", async (orig) => {
-  const actual = await orig<typeof import("ai")>();
-  return {
-    ...actual,
-    generateText: vi.fn(),
-    streamText: vi.fn(),
-  };
-});
-
-import { streamText } from "ai";
+// ---------------------------------------------------------------------------
+// Phase 4 Stream
+// ---------------------------------------------------------------------------
 
 describe("runPhase4Stream (Synthesis)", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("yields partial objects via onPartial callback and returns final", async () => {
-    const partials: any[] = [];
     const finalObj = {
-      verdict: "GO",
+      verdict: "GO" as const,
       synthesisScore: 7.5,
       scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
       reportMarkdown: "x".repeat(4500),
       verdictReason: "reasonable".repeat(10),
     };
-    // Simulate a progressive stream with partials, and a resolved output promise
     async function* mockPartials() {
       yield { verdict: "GO" };
       yield { verdict: "GO", synthesisScore: 7.5 };
@@ -160,11 +190,7 @@ describe("runPhase4Stream (Synthesis)", () => {
       partialOutputStream: mockPartials(),
       output: Promise.resolve(finalObj),
     });
-    (resolvePhase as any).mockResolvedValue({
-      model: "claude-sonnet-4-6",
-      provider: "anthropic",
-      client: (_name: string) => ({}),
-    });
+    mockResolveNoFallback("claude-sonnet-4-6", "anthropic");
 
     const collected: any[] = [];
     const final = await runPhase4Stream({ nicheName: "X", context: "ctx" }, (p) => collected.push(p));
@@ -183,16 +209,16 @@ describe("runPhase4Stream (Synthesis)", () => {
       partialOutputStream: mockPartials(),
       output: Promise.resolve(invalidObj),
     });
-    (resolvePhase as any).mockResolvedValue({
-      model: "claude-sonnet-4-6",
-      provider: "anthropic",
-      client: (_n: string) => ({}),
-    });
+    mockResolveNoFallback("claude-sonnet-4-6", "anthropic");
     await expect(
       runPhase4Stream({ nicheName: "X", context: "ctx" }, () => {})
     ).rejects.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Polling
+// ---------------------------------------------------------------------------
 
 describe("runPolling", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -206,17 +232,17 @@ describe("runPolling", () => {
       ],
     };
     (generateText as any).mockResolvedValue({ output: mockQuestions });
-    (resolvePhase as any).mockResolvedValue({
-      model: "gpt-4.1-mini",
-      provider: "openai",
-      client: (_n: string) => ({}),
-    });
+    mockResolveNoFallback("gpt-4.1-mini", "openai");
 
     const result = await runPolling({ nicheName: "X", report: "some report" });
     expect(result.questions).toHaveLength(3);
     expect(result.questions[0].type).toBe("single_choice");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Brainstorm
+// ---------------------------------------------------------------------------
 
 describe("runBrainstorm", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -230,14 +256,190 @@ describe("runBrainstorm", () => {
       })),
     };
     (generateText as any).mockResolvedValue({ output: mockIdeas });
-    (resolvePhase as any).mockResolvedValue({
-      model: "gpt-4.1-mini",
-      provider: "openai",
-      client: (_n: string) => ({}),
-    });
+    mockResolveNoFallback("gpt-4.1-mini", "openai");
 
     const result = await runBrainstorm({ context: "AI tools for HR" });
     expect(result.ideas).toHaveLength(10);
     expect(result.ideas[0].id).toBe("idea-0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fallback path tests — Phase 1
+// ---------------------------------------------------------------------------
+
+describe("runPhase1 with fallback", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("uses fallback when primary throws 503 (eligible)", async () => {
+    mockResolveWithFallback();
+    (generateText as any)
+      .mockRejectedValueOnce(makeApiError(503)) // primary fails
+      .mockResolvedValueOnce({ text: JSON.stringify({ keywords: ["a", "b", "c"], summary: "x".repeat(60) }) }); // fallback succeeds (non-grounded, no providerMetadata)
+    const onFallback = vi.fn();
+    const result = await runPhase1({ nicheName: "test", strategy: "gaps" }, { onFallback });
+    expect(result.data.keywords).toHaveLength(3);
+    expect(result.sources).toEqual([]); // fallback is non-grounded → empty sources
+    expect(onFallback).toHaveBeenCalledWith("gpt-4.1-mini", expect.stringContaining("503"));
+  });
+
+  it("fails on 401 (no fallback attempted)", async () => {
+    mockResolveWithFallback();
+    const generateTextMock = generateText as any;
+    generateTextMock.mockRejectedValueOnce(makeApiError(401));
+    const onFallback = vi.fn();
+    await expect(
+      runPhase1({ nicheName: "X", strategy: "gaps" }, { onFallback })
+    ).rejects.toThrow();
+    expect(generateTextMock).toHaveBeenCalledTimes(1); // primary only, no fallback
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+
+  it("fails when primary 503 + fallback also 503 — fallback error rethrown", async () => {
+    mockResolveWithFallback();
+    const primaryError = makeApiError(503);
+    const fallbackError = makeApiError(502);
+    (generateText as any)
+      .mockRejectedValueOnce(primaryError)
+      .mockRejectedValueOnce(fallbackError);
+    await expect(
+      runPhase1({ nicheName: "X", strategy: "gaps" }, {})
+    ).rejects.toBe(fallbackError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fallback path tests — Phase 4 Stream
+// ---------------------------------------------------------------------------
+
+describe("runPhase4Stream fallback semantics", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("uses non-streaming fallback on pre-stream failure", async () => {
+    mockResolveWithFallback("claude-sonnet-4-6", "anthropic", "gpt-4.1-mini", "openai");
+    const err = makeApiError(503);
+    async function* emptyStream() { throw err; }
+    // Attach .catch to prevent unhandled rejection — the promise is never consumed
+    // because the async iterator throws first, causing runPhase4Stream to take the
+    // catch branch before it ever awaits streamResult.output.
+    const outputPromise = Promise.reject(err);
+    outputPromise.catch(() => {});
+    (streamText as any).mockReturnValue({
+      partialOutputStream: emptyStream(),
+      output: outputPromise,
+    });
+    const finalObj = {
+      verdict: "GO" as const,
+      synthesisScore: 7.5,
+      scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
+      reportMarkdown: "x".repeat(4500),
+      verdictReason: "reasoned".repeat(20),
+    };
+    (generateText as any).mockResolvedValueOnce({ output: finalObj });
+    const onFallback = vi.fn();
+    const onPartial = vi.fn();
+    const result = await runPhase4Stream(
+      { nicheName: "X", context: "ctx" },
+      onPartial,
+      { onFallback },
+    );
+    expect(result.verdict).toBe("GO");
+    expect(onFallback).toHaveBeenCalled();
+    expect(onPartial).not.toHaveBeenCalled(); // no partials emitted (pre-stream fail)
+  });
+
+  it("fails mid-stream with err.wasStreaming=true (no fallback attempted)", async () => {
+    mockResolveWithFallback();
+    const finalObj = {
+      verdict: "GO" as const,
+      synthesisScore: 7.5,
+      scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
+      reportMarkdown: "x".repeat(4500),
+      verdictReason: "reasoned".repeat(20),
+    };
+    async function* oneThenThrow() {
+      yield { verdict: "GO" };
+      throw new Error("network-drop");
+    }
+    (streamText as any).mockReturnValue({
+      partialOutputStream: oneThenThrow(),
+      output: Promise.resolve(finalObj), // never awaited because iterator throws first
+    });
+    const onFallback = vi.fn();
+    const onPartial = vi.fn();
+    await expect(
+      runPhase4Stream({ nicheName: "X", context: "ctx" }, onPartial, { onFallback })
+    ).rejects.toMatchObject({ wasStreaming: true });
+    expect(onPartial).toHaveBeenCalledOnce(); // 1 partial before error
+    expect(onFallback).not.toHaveBeenCalled(); // mid-stream → no fallback
+  });
+
+  it("fails pre-stream + fallback also fails — fallback error rethrown, no wasStreaming tag", async () => {
+    mockResolveWithFallback();
+    const primaryError = makeApiError(503);
+    async function* emptyStream() { throw primaryError; }
+    // Attach .catch to prevent unhandled rejection — the iterator throws before output is awaited.
+    const outputPromise = Promise.reject(primaryError);
+    outputPromise.catch(() => {});
+    (streamText as any).mockReturnValue({
+      partialOutputStream: emptyStream(),
+      output: outputPromise,
+    });
+    const fallbackError = makeApiError(502);
+    (generateText as any).mockRejectedValueOnce(fallbackError);
+    await expect(
+      runPhase4Stream({ nicheName: "X", context: "ctx" }, () => {}, {})
+    ).rejects.toBe(fallbackError);
+    // Neither error should have wasStreaming flag (no partials ever emitted)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fallback path tests — Polling
+// ---------------------------------------------------------------------------
+
+describe("runPolling with fallback", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("uses fallback when primary fails transient", async () => {
+    mockResolveWithFallback("gpt-4.1-mini", "openai", "claude-sonnet-4-6", "anthropic");
+    const validQuestions = {
+      questions: [
+        { id: "q1", type: "single_choice", text: "Q?", options: ["a", "b"] },
+        { id: "q2", type: "likert", text: "Q?", options: null },
+        { id: "q3", type: "short_text", text: "Q?", options: null },
+      ],
+    };
+    (generateText as any)
+      .mockRejectedValueOnce(makeApiError(500))
+      .mockResolvedValueOnce({ output: validQuestions });
+    const onFallback = vi.fn();
+    const result = await runPolling({ nicheName: "X", report: "test report" }, { onFallback });
+    expect(result.questions).toHaveLength(3);
+    expect(onFallback).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fallback path tests — Brainstorm
+// ---------------------------------------------------------------------------
+
+describe("runBrainstorm with fallback", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("uses fallback when primary fails transient", async () => {
+    mockResolveWithFallback("gpt-4.1-mini", "openai", "claude-sonnet-4-6", "anthropic");
+    const validIdeas = {
+      ideas: Array.from({ length: 10 }, (_, i) => ({
+        id: `idea-${i}`, title: `T${i}`, description: `D${i}`,
+      })),
+    };
+    (generateText as any)
+      .mockRejectedValueOnce(makeApiError(503))
+      .mockResolvedValueOnce({ output: validIdeas });
+    const onFallback = vi.fn();
+    const result = await runBrainstorm({ context: "SaaS tools" }, { onFallback });
+    expect(result.ideas).toHaveLength(10);
+    expect(onFallback).toHaveBeenCalled();
   });
 });

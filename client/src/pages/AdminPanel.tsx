@@ -8,9 +8,18 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Activity, AlertCircle, CheckCircle2, Key, Loader2, Save, Settings, Shield, Users, Zap } from "lucide-react";
-import { useState } from "react";
+import { Activity, AlertCircle, AlertTriangle, CheckCircle2, Key, Loader2, Save, Settings, Shield, Users, Zap } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+
+// ─── Client-side provider detection (mirrors server-side logic) ───────────────
+function detectProvider(modelName: string): "openai" | "anthropic" | "gemini" | null {
+  if (!modelName) return null;
+  if (modelName.startsWith("gemini-")) return "gemini";
+  if (modelName.startsWith("gpt-") || modelName.startsWith("o3-") || modelName.startsWith("o4-")) return "openai";
+  if (modelName.startsWith("claude-")) return "anthropic";
+  return null;
+}
 
 const MOCK_USERS = [
   { id: 1, name: "Kovács Péter", email: "peter@example.com", credits: 15, role: "user", researches: 5, createdAt: "2026-03-01" },
@@ -108,8 +117,23 @@ function RoutingRow({ row, onSave, isSaving }: RoutingRowProps) {
   const { t } = useTranslation();
   const [primaryModel, setPrimaryModel] = useState(row.primaryModel);
   const [fallbackModel, setFallbackModel] = useState(row.fallbackModel ?? "");
+  const [savedCrossProvider, setSavedCrossProvider] = useState(false);
 
-  const phaseKey = row.phase as keyof typeof t extends never ? string : string;
+  const crossProvider = useMemo(() => {
+    if (!fallbackModel) return false;
+    const p = detectProvider(primaryModel);
+    const f = detectProvider(fallbackModel);
+    return p !== null && f !== null && p !== f;
+  }, [primaryModel, fallbackModel]);
+
+  const isGroundedPhase = ["wide_scan", "gap_detection", "deep_dives"].includes(row.phase);
+  const showGroundingWarning = crossProvider && isGroundedPhase;
+
+  // Reset confirm state whenever inputs change — user must re-acknowledge if config changes
+  useEffect(() => {
+    setSavedCrossProvider(false);
+  }, [primaryModel, fallbackModel]);
+
   const phaseLabel = t(`admin.ai.phases.${row.phase}`, { defaultValue: row.phase });
 
   return (
@@ -130,15 +154,42 @@ function RoutingRow({ row, onSave, isSaving }: RoutingRowProps) {
           placeholder={t("admin.ai.fallbackModel")}
           className="text-sm font-mono"
         />
+        {showGroundingWarning && (
+          <div className="text-xs text-amber-600 dark:text-amber-500 mt-1 flex items-start gap-1">
+            <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+            <span>
+              {t("admin.ai.crossProviderWarning", {
+                fallback: detectProvider(fallbackModel) ?? "?",
+                primary: detectProvider(primaryModel) ?? "?",
+              })}
+            </span>
+          </div>
+        )}
       </TableCell>
-      <TableCell className="w-20">
+      <TableCell className="w-28">
         <Button
           size="sm"
-          variant="outline"
+          variant={showGroundingWarning && !savedCrossProvider ? "outline" : "default"}
           disabled={isSaving}
-          onClick={() => onSave({ primaryModel, fallbackModel })}
+          onClick={() => {
+            if (showGroundingWarning && !savedCrossProvider) {
+              // First click: show confirmation toast, flip state to pending_confirm
+              setSavedCrossProvider(true);
+              toast.warning(t("admin.ai.crossProviderConfirmNeeded"));
+              return;
+            }
+            // Second click (or non-warning case): execute save
+            onSave({ primaryModel, fallbackModel });
+            setSavedCrossProvider(false);
+          }}
         >
-          {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+          {isSaving ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
+          ) : showGroundingWarning && !savedCrossProvider ? (
+            t("admin.ai.confirmCrossProvider")
+          ) : (
+            t("admin.ai.save")
+          )}
         </Button>
       </TableCell>
     </TableRow>
