@@ -158,10 +158,18 @@ async function invokeNonGroundedFallback<TSchema extends z.ZodSchema>(
     messages: messagesWithJsonHint,
     abortSignal: options.abortSignal,
   });
-  // Note: no Zod retry here — fallback path is intentionally one-shot (executeWithFallback design).
-  // If the fallback response fails Zod parse, the error propagates directly (user-visible fail).
-  // No groundingMetadata available → empty sources (fallback is non-grounded by design).
-  return { data: parseJsonResponse(rawResult.text, schema), sources: [] };
+  try {
+    const data = parseJsonResponse(rawResult.text, schema);
+    // Note: no retry here — fallback path is intentionally one-shot (executeWithFallback design)
+    return { data, sources: [] };
+  } catch (err) {
+    const preview = rawResult.text.slice(0, 200);
+    const kind = err instanceof z.ZodError ? "schema-mismatch" : err instanceof SyntaxError ? "invalid-json" : "parse-error";
+    throw new Error(
+      `Fallback ${fbModel} returned ${kind}: ${preview}${rawResult.text.length > 200 ? "..." : ""}`,
+      { cause: err },
+    );
+  }
 }
 
 export async function runPhase1(
