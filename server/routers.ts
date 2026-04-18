@@ -31,6 +31,8 @@ import { eq } from "drizzle-orm";
 import { aiConfigs, modelRouting } from "../drizzle/schema";
 import { generateText } from "ai";
 import { nanoid } from "nanoid";
+import { encrypt, getMasterKey } from "./ai/crypto";
+import { decryptIfNeeded } from "./ai/router";
 
 // In-memory rate limit for admin.ai.testProvider — 10s cooldown per (userId, provider)
 const testProviderCooldown = new Map<string, number>();
@@ -276,6 +278,7 @@ export const appRouter = router({
         return rows.map(r => ({
           provider: r.provider,
           hasKey: !!r.apiKey && r.apiKey.length > 0,
+          isEncrypted: !!r.apiKey && r.apiKey.startsWith("ENC1:"),
           isActive: r.isActive,
           updatedAt: r.updatedAt,
         }));
@@ -290,15 +293,20 @@ export const appRouter = router({
         .mutation(async ({ input, ctx }) => {
           const db = await getDb();
           if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "No DB" });
+
+          // Encrypt BEFORE DB write — no plaintext ever hits aiConfigs.apiKey column for new saves.
+          const aad = `aiConfig:${input.provider.toLowerCase()}`;
+          const encryptedKey = encrypt(input.apiKey, getMasterKey(), aad);
+
           const existing = await db.select().from(aiConfigs).where(eq(aiConfigs.provider, input.provider)).limit(1);
           if (existing.length > 0) {
             await db.update(aiConfigs)
-              .set({ apiKey: input.apiKey, isActive: input.isActive })
+              .set({ apiKey: encryptedKey, isActive: input.isActive })
               .where(eq(aiConfigs.provider, input.provider));
           } else {
             await db.insert(aiConfigs).values({
               provider: input.provider,
-              apiKey: input.apiKey,
+              apiKey: encryptedKey,
               isActive: input.isActive,
             });
           }
@@ -328,8 +336,19 @@ export const appRouter = router({
           const db = await getDb();
           if (!db) return { ok: false, error: "No DB connection" };
           const rows = await db.select().from(aiConfigs).where(eq(aiConfigs.provider, input.provider)).limit(1);
-          const apiKey = rows[0]?.apiKey;
-          if (!apiKey) return { ok: false, error: "No API key set" };
+          const storedKey = rows[0]?.apiKey;
+          if (!storedKey) return { ok: false, error: "No API key set" };
+
+          // Handle both encrypted (ENC1:) and legacy plaintext rows (lazy migration).
+          // decryptIfNeeded throws DecryptionError for corrupt ENC1: values — surface to
+          // admin with the standard error shape rather than letting it propagate.
+          let apiKey: string;
+          try {
+            const aad = `aiConfig:${input.provider.toLowerCase()}`;
+            apiKey = decryptIfNeeded(storedKey, aad);
+          } catch (err) {
+            return { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
 
           try {
             const client = getProvider(input.provider as ProviderId, apiKey);
