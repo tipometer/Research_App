@@ -119,7 +119,7 @@ server/ai/sanitize.test.ts      ← ~20 új teszt
 | `server/ai/pipeline-phases.ts` | Minden `runPhaseN` + `runPolling`/`runBrainstorm` átcsomagolva `executeWithFallback`-be; `runPhase4Stream` kapja a `streamStarted` flag + pre-stream non-streaming fallback path-ot. Sanitize hívások minden prompt builder helyén; `+8` teszt |
 | `server/ai/retry.ts` | Változatlan (Zod retry továbbra is primary hívás belsejében fut — fallback csak retry-exhausted után) |
 | `server/research-pipeline.ts` | SSE type union bővítve `fallback_used`-del; `onFallback` callback átadva minden `runPhaseN` hívásnak; audit log extension |
-| `server/routers.ts` | Változatlan (admin procedure-k most is egy DB sort frissítenek; a cross-provider check kliens oldali) |
+| `server/routers.ts` | **NEM MÓDOSUL** — admin `updateRouting` már most is fogadja a `fallbackModel` mezőt (C1-ben került be); a cross-provider validáció pure frontend logika (admin UI komponens). Itt listázva csak az explicit "no change" miatt. |
 | `server/deep-research.test.ts` | Regression check: `messages` tartalom assertions frissítése ha szükséges (Task 3.3) |
 | `client/src/pages/AdminPanel.tsx` | `RoutingRow`-hoz cross-provider badge + two-click confirm |
 | `client/src/pages/ResearchProgress.tsx` | `fallback_used` SSE handler (state-only) + `pipeline_complete` aggregált toast + phase card fallback badge |
@@ -772,7 +772,7 @@ A meglévő 4 integration test (`pipeline-phases.integration.test.ts`) változat
 5. **Streaming synthesis**: pre-stream failure → fallback (non-streaming `generateText`); mid-stream → fail (no restart) — `streamStarted` flag pattern
 6. **Sanitization scope**: direct input (`sanitizeUserInput`) + indirect content (`wrapIndirect`) + metadata escape
 7. **Strip policy**: silent on control chars + ANSI; WARN log on injection keywords; NEVER reject in C2a
-8. **Cross-delimiter escape**: `wrapIndirect` strip both own delimiter AND `<user_input>` tags
+8. **Cross-delimiter escape**: `wrapIndirect` strips ALL 8 delimiter tokens (4 pairs across 4 trust zones: `<user_input>`, `<admin_system_prompt>`, `<phase_summary>`, `<grounded_snippet>`) from indirect content — prevents any cross-escape between zones
 9. **Admin systemPrompt**: own `<admin_system_prompt>` delimiter; NO keyword strip (trust-level)
 10. **`INJECTION_KEYWORDS`**: 11 regex patterns (6 original + 5 jailbreak-specific)
 11. **Admin UI cross-provider**: two-click confirm (explicit label "Megerősítés (cross-provider)"); NO modal
