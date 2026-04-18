@@ -108,7 +108,7 @@ async function invokeGrounded<TSchema extends z.ZodSchema>(
     parsed = parseAndValidate(rawResult.text);
   }
 
-  const providerMeta = (rawResult as any).providerMetadata;
+  const providerMeta = rawResult.providerMetadata;
   const grounding = providerMeta?.google?.groundingMetadata as
     | GroundingMetadata
     | undefined;
@@ -146,8 +146,14 @@ async function invokeNonGroundedFallback<TSchema extends z.ZodSchema>(
   schema: TSchema,
   messages: ModelMessage[],
   jsonShapeInstruction: string,
-  options: { abortSignal?: AbortSignal } = {},
+  options: { abortSignal?: AbortSignal; deadline?: number } = {},
 ): Promise<PhaseResult<z.infer<TSchema>>> {
+  // Deadline guard — fallback path gets at least 30s of remaining budget or skips
+  if (options.deadline && options.deadline - Date.now() < 30_000) {
+    throw new Error(
+      `Fallback ${fbModel} skipped: insufficient time budget (${options.deadline - Date.now()}ms remaining)`,
+    );
+  }
   // Non-grounded call: no `tools`, just generateText with JSON-shape prompt + manual parse + Zod
   const messagesWithJsonHint = [
     ...messages,
@@ -213,7 +219,7 @@ REQUIRED PROCESS:
   );
 
   const fallbackCall = fallback
-    ? () => invokeNonGroundedFallback(fallback.model, fallback.client, WideScanSchema, messages, jsonShape, { abortSignal: options.abortSignal })
+    ? () => invokeNonGroundedFallback(fallback.model, fallback.client, WideScanSchema, messages, jsonShape, { abortSignal: options.abortSignal, deadline: options.deadline })
     : null;
 
   return executeWithFallback(
@@ -272,7 +278,7 @@ REQUIRED PROCESS:
   );
 
   const fallbackCall = fallback
-    ? () => invokeNonGroundedFallback(fallback.model, fallback.client, GapDetectionSchema, messages, jsonShape, { abortSignal: options.abortSignal })
+    ? () => invokeNonGroundedFallback(fallback.model, fallback.client, GapDetectionSchema, messages, jsonShape, { abortSignal: options.abortSignal, deadline: options.deadline })
     : null;
 
   return executeWithFallback(
@@ -331,7 +337,7 @@ REQUIRED PROCESS:
   );
 
   const fallbackCall = fallback
-    ? () => invokeNonGroundedFallback(fallback.model, fallback.client, DeepDivesSchema, messages, jsonShape, { abortSignal: options.abortSignal })
+    ? () => invokeNonGroundedFallback(fallback.model, fallback.client, DeepDivesSchema, messages, jsonShape, { abortSignal: options.abortSignal, deadline: options.deadline })
     : null;
 
   return executeWithFallback(

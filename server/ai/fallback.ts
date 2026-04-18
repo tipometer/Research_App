@@ -35,6 +35,12 @@ export function isFallbackEligible(err: unknown): boolean {
     if (code !== undefined && code < 500 && code !== 429) return false;
     return true;
   }
+  // Programming errors are code bugs — fallback can't fix them, would just double-latency.
+  if (err instanceof TypeError || err instanceof ReferenceError || err instanceof RangeError) {
+    console.warn(`[fallback] Code bug suspected (${err.name}: ${err.message}). Not attempting fallback.`);
+    return false;
+  }
+  // Generic Error / AbortError / network / timeout / unknown throw → eligible (transient assumption)
   return true;
 }
 

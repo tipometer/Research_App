@@ -42,6 +42,18 @@ describe("isFallbackEligible", () => {
   it("returns true for APICallError with undefined statusCode (network)", () => {
     expect(isFallbackEligible(makeApiError(undefined))).toBe(true);
   });
+
+  it("returns false for TypeError (code bug, not transient)", () => {
+    expect(isFallbackEligible(new TypeError("Cannot read property 'x' of undefined"))).toBe(false);
+  });
+
+  it("returns false for ReferenceError (code bug)", () => {
+    expect(isFallbackEligible(new ReferenceError("foo is not defined"))).toBe(false);
+  });
+
+  it("returns false for RangeError (code bug)", () => {
+    expect(isFallbackEligible(new RangeError("Maximum call stack exceeded"))).toBe(false);
+  });
 });
 
 describe("executeWithFallback", () => {
