@@ -763,7 +763,7 @@ A meglévő 4 integration test (`pipeline-phases.integration.test.ts`) változat
 
 ---
 
-## 13. Decisions log (C2a, 18 item)
+## 13. Decisions log (C2a, 19 items)
 
 1. **Scope split**: C2a = fallback + sanitization; C2b = encryption (külön sprint, merge után indul)
 2. **Cross-provider fallback**: engedélyezett + admin UI warning (B policy)
