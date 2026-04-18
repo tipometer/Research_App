@@ -75,6 +75,13 @@ export default function ResearchProgress() {
     const es = new EventSource(`/api/research/${id}/stream`);
     esRef.current = es;
 
+    // Local accumulator for aggregated fallback toast — decoupled from React state
+    // so we can read the authoritative count inside the synchronous SSE handler
+    // (React state updates are async; reading them inside the handler is racy).
+    // This also avoids the anti-pattern of firing toasts from inside a setState callback
+    // (which would double-fire under React Strict Mode).
+    const fallbackAccumulator: Array<{ phase: string; model: string; groundingLost: boolean }> = [];
+
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -109,35 +116,38 @@ export default function ResearchProgress() {
             }
             break;
 
-          case "fallback_used":
-            setFallbackPhases((prev) => [...prev, {
+          case "fallback_used": {
+            const entry = {
               phase: data.phase,
               model: data.fallbackModel,
               groundingLost: data.groundingLost,
-            }]);
+            };
+            // Push to local accumulator for later aggregation (authoritative count)
+            fallbackAccumulator.push(entry);
+            // Also update React state for phase-card badge rendering
+            setFallbackPhases((prev) => [...prev, entry]);
             setPhases((p) => p.map((ph) =>
               ph.id === data.phase
                 ? { ...ph, fallbackUsed: true, fallbackModel: data.fallbackModel, groundingLost: data.groundingLost }
                 : ph
             ));
             break;  // NO toast here — aggregated at pipeline_complete
+          }
 
           case "pipeline_complete": {
-            // Aggregated fallback notification (single toast per pipeline, not per event)
-            setFallbackPhases((prev) => {
-              if (prev.length === 1) {
-                const fb = prev[0];
-                const phaseLabel = t(`progress.phases.${fb.phase}`);
-                toast.info(
-                  fb.groundingLost
-                    ? t("progress.fallback.groundingLost", { phase: phaseLabel, model: fb.model })
-                    : t("progress.fallback.used", { phase: phaseLabel, model: fb.model })
-                );
-              } else if (prev.length > 1) {
-                toast.info(t("progress.fallback.multiple", { count: prev.length }));
-              }
-              return prev;
-            });
+            // Aggregated fallback notification — read from local accumulator (sync, authoritative)
+            // This avoids firing toasts from inside a setState callback (React Strict Mode double-fire risk).
+            if (fallbackAccumulator.length === 1) {
+              const fb = fallbackAccumulator[0];
+              const phaseLabel = t(`progress.phases.${fb.phase}`);
+              toast.info(
+                fb.groundingLost
+                  ? t("progress.fallback.groundingLost", { phase: phaseLabel, model: fb.model })
+                  : t("progress.fallback.used", { phase: phaseLabel, model: fb.model })
+              );
+            } else if (fallbackAccumulator.length > 1) {
+              toast.info(t("progress.fallback.multiple", { count: fallbackAccumulator.length }));
+            }
             addFeed(`🎉 Kutatás befejezve! Verdikt: ${data.verdict} — ${data.synthesisScore}/10`, "phase");
             setPhases((p) => p.map((ph) => ph.status === "running" ? { ...ph, status: "done" } : ph));
             setOverallStatus("done");
