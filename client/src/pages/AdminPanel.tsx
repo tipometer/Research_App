@@ -47,6 +47,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 interface ProviderRowProps {
   provider: ProviderId;
   hasKey: boolean;
+  isEncrypted: boolean;
   isActive: boolean;
   onSave: (apiKey: string, isActive: boolean) => void;
   onTest: () => Promise<void>;
@@ -55,7 +56,7 @@ interface ProviderRowProps {
   registerClear?: (fn: () => void) => void;
 }
 
-function ProviderRow({ provider, hasKey, isActive, onSave, onTest, isSaving, isTesting, registerClear }: ProviderRowProps) {
+function ProviderRow({ provider, hasKey, isEncrypted, isActive, onSave, onTest, isSaving, isTesting, registerClear }: ProviderRowProps) {
   const { t } = useTranslation();
   const [apiKey, setApiKey] = useState("");
 
@@ -67,9 +68,19 @@ function ProviderRow({ provider, hasKey, isActive, onSave, onTest, isSaving, isT
     <div className="space-y-2 p-4 border rounded-lg">
       <div className="flex items-center justify-between">
         <Label className="font-medium">{PROVIDER_LABELS[provider]}</Label>
-        <Badge variant={hasKey ? "default" : "secondary"} className="text-xs">
-          {hasKey ? t("admin.ai.configured") : t("admin.ai.notSet")}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={hasKey ? "default" : "secondary"} className="text-xs">
+            {hasKey ? t("admin.ai.configured") : t("admin.ai.notSet")}
+          </Badge>
+          {hasKey && (
+            <Badge
+              variant={isEncrypted ? "default" : "destructive"}
+              className="text-xs"
+            >
+              {isEncrypted ? t("admin.ai.encrypted") : t("admin.ai.plaintextLegacy")}
+            </Badge>
+          )}
+        </div>
       </div>
       <div className="flex gap-2">
         <Input
@@ -316,6 +327,7 @@ export default function AdminPanel() {
                           key={provider}
                           provider={provider}
                           hasKey={config?.hasKey ?? false}
+                          isEncrypted={config?.isEncrypted ?? false}
                           isActive={config?.isActive ?? false}
                           isSaving={savingProvider === provider}
                           isTesting={testingProvider === provider}

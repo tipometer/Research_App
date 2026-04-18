@@ -166,6 +166,8 @@ export const en = {
         testConnection: "Test Connection",
         configured: "Configured",
         notSet: "Not set",
+        encrypted: "🔒 Encrypted",
+        plaintextLegacy: "⚠ Plaintext (legacy)",
         keySaved: "API key saved",
         testOk: "Connection successful",
         testFail: "Connection failed",
