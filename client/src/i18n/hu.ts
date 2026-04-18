@@ -175,6 +175,8 @@ export const hu = {
         testConnection: "Kapcsolat Tesztelése",
         configured: "Beállítva",
         notSet: "Nincs megadva",
+        encrypted: "🔒 Titkosítva",
+        plaintextLegacy: "⚠ Régi (titkosítatlan)",
         keySaved: "API kulcs elmentve",
         testOk: "Kapcsolat sikeres",
         testFail: "Kapcsolat sikertelen",

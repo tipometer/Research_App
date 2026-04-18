@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { APICallError } from "ai";
 import { z } from "zod";
 import { isFallbackEligible, executeWithFallback, PipelineStreamError } from "./fallback";
+import { DecryptionError } from "./crypto";
 
 const makeApiError = (statusCode: number | undefined) => new APICallError({
   message: "test",
@@ -149,5 +150,53 @@ describe("PipelineStreamError", () => {
     const err = new PipelineStreamError("raw string reason");
     expect(err.cause).toBe("raw string reason");
     expect(err.message).toBe("raw string reason");
+  });
+});
+
+describe("fallback — DecryptionError classification (C2b)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("DecryptionError is NOT eligible for fallback (permanent config error)", () => {
+    const err = new DecryptionError("auth tag mismatch");
+    expect(isFallbackEligible(err)).toBe(false);
+  });
+
+  it("WARN log for DecryptionError does NOT contain AAD or provider name", () => {
+    // Even if the error's message contains leaky substrings, the log must not.
+    const err = new DecryptionError("Decryption failed for aiConfig:openai with cause <X>");
+    isFallbackEligible(err);
+    const logged = warnSpy.mock.calls.flat().join(" ");
+    expect(logged).not.toMatch(/aiConfig:/);
+    expect(logged).not.toMatch(/openai|anthropic|gemini/);
+    // Should contain a generic descriptor
+    expect(logged).toMatch(/decryption|config/i);
+  });
+
+  it("generic 500 APICallError is still eligible (regression check)", () => {
+    const err = new APICallError({
+      url: "x",
+      requestBodyValues: {},
+      statusCode: 500,
+      message: "upstream error",
+    });
+    expect(isFallbackEligible(err)).toBe(true);
+  });
+
+  it("401 APICallError is still NOT eligible (regression check)", () => {
+    const err = new APICallError({
+      url: "x",
+      requestBodyValues: {},
+      statusCode: 401,
+      message: "unauthorized",
+    });
+    expect(isFallbackEligible(err)).toBe(false);
   });
 });

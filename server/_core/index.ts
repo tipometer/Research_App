@@ -1,4 +1,10 @@
-import "dotenv/config";
+// Load env in priority order: .env first (baseline defaults), then .env.local
+// (local overrides, e.g., dev API keys and MASTER_ENCRYPTION_KEY). .env.local is
+// gitignored; its values override .env. This mirrors the Next.js / Vite convention.
+import dotenv from "dotenv";
+dotenv.config({ path: ".env" });
+dotenv.config({ path: ".env.local", override: true });
+
 import express from "express";
 import { createServer } from "http";
 import net from "net";
@@ -11,6 +17,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { runResearchPipeline } from "../research-pipeline";
 import { sdk } from "./sdk";
+import { getMasterKey } from "../ai/crypto";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -32,6 +39,10 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  // Fast-fail: validate MASTER_ENCRYPTION_KEY is set + well-formed before any work.
+  // Throws with a clear error message if the env is missing or has wrong length.
+  getMasterKey();
+
   const app = express();
   const server = createServer(app);
 

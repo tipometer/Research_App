@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { aiConfigs, modelRouting } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { getProvider, type ProviderId } from "./providers";
+import { decrypt, getMasterKey } from "./crypto";
 
 export type Phase = "wide_scan" | "gap_detection" | "deep_dives" | "synthesis" | "polling" | "brainstorm";
 
@@ -39,6 +40,34 @@ export async function lookupModel(phase: Phase): Promise<string> {
   throw new Error(`No model configured for phase: ${phase}`);
 }
 
+/**
+ * Single point-of-truth format detection + decrypt-or-passthrough for stored API keys.
+ *
+ * - `ENC1:...` prefix → decrypt via AES-256-GCM (throws DecryptionError on failure).
+ * - Anything else → lazy-migration passthrough: returns the string verbatim and
+ *   logs a WARN in dev/staging (silenced in production to avoid noise during
+ *   the migration period).
+ *
+ * The `aad` parameter binds ciphertext to its provider context — see spec §4.4.
+ *
+ * Exported for reuse by admin routes (testProvider in server/routers.ts).
+ */
+export function decryptIfNeeded(stored: string, aad: string): string {
+  if (!stored.startsWith("ENC1:")) {
+    if (process.env.NODE_ENV !== "production") {
+      // NOTE: AAD included intentionally for dev diagnostics — NOT a log hygiene bug.
+      // The fallback-layer DecryptionError WARN (server/ai/fallback.ts) is different:
+      // it MUST NOT include AAD. See Task 4.
+      console.warn(
+        `[crypto] Plaintext API key detected for ${aad} — ` +
+        `will encrypt on next admin save (lazy migration)`
+      );
+    }
+    return stored;
+  }
+  return decrypt(stored, getMasterKey(), aad);
+}
+
 export async function lookupApiKey(provider: ProviderId): Promise<string> {
   const db = await getDb();
   if (db) {
@@ -47,7 +76,10 @@ export async function lookupApiKey(provider: ProviderId): Promise<string> {
       .from(aiConfigs)
       .where(and(eq(aiConfigs.provider, provider), eq(aiConfigs.isActive, true)))
       .limit(1);
-    if (rows.length > 0 && rows[0].apiKey) return rows[0].apiKey;
+    if (rows.length > 0 && rows[0].apiKey) {
+      const aad = `aiConfig:${provider.toLowerCase()}`;
+      return decryptIfNeeded(rows[0].apiKey, aad);
+    }
   }
   const envKey = `${provider.toUpperCase()}_API_KEY`;
   const envValue = process.env[envKey];
