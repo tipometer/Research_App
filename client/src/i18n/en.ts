@@ -76,6 +76,11 @@ export const en = {
       synthesis: {
         streaming: "Report generating live...",
       },
+      fallback: {
+        used: "Phase {{phase}} switched to fallback model ({{model}})",
+        multiple: "{{count}} phases switched to fallback during this research",
+        groundingLost: "Phase {{phase}} fallback ({{model}}): grounding unavailable, sources empty",
+      },
     },
     report: {
       verdict: {
@@ -167,6 +172,10 @@ export const en = {
         primaryModel: "Primary Model",
         fallbackModel: "Fallback Model",
         routingSaved: "Routing updated",
+        crossProviderWarning: "⚠️ Fallback provider ({{fallback}}) differs from primary ({{primary}}). Grounding will be unavailable; sources will be empty on this fallback.",
+        crossProviderConfirmNeeded: "Cross-provider configuration requires confirmation",
+        confirmCrossProvider: "Confirm (cross-provider)",
+        fallbackNone: "None (primary failure → pipeline fail)",
         phases: {
           wide_scan: "Wide Scan",
           gap_detection: "Gap Detection",

@@ -158,7 +158,10 @@ function RoutingRow({ row, onSave, isSaving }: RoutingRowProps) {
           <div className="text-xs text-amber-600 dark:text-amber-500 mt-1 flex items-start gap-1">
             <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
             <span>
-              Fallback provider ({detectProvider(fallbackModel)}) differs from primary ({detectProvider(primaryModel)}). Grounding will be unavailable; sources will be empty on this fallback.
+              {t("admin.ai.crossProviderWarning", {
+                fallback: detectProvider(fallbackModel) ?? "?",
+                primary: detectProvider(primaryModel) ?? "?",
+              })}
             </span>
           </div>
         )}
@@ -172,7 +175,7 @@ function RoutingRow({ row, onSave, isSaving }: RoutingRowProps) {
             if (showGroundingWarning && !savedCrossProvider) {
               // First click: show confirmation toast, flip state to pending_confirm
               setSavedCrossProvider(true);
-              toast.warning("Cross-provider configuration requires confirmation. Click again to save.");
+              toast.warning(t("admin.ai.crossProviderConfirmNeeded"));
               return;
             }
             // Second click (or non-warning case): execute save
@@ -183,9 +186,9 @@ function RoutingRow({ row, onSave, isSaving }: RoutingRowProps) {
           {isSaving ? (
             <Loader2 className="w-3 h-3 animate-spin" />
           ) : showGroundingWarning && !savedCrossProvider ? (
-            "Megerősítés (cross-provider)"
+            t("admin.ai.confirmCrossProvider")
           ) : (
-            "Mentés"
+            t("admin.ai.save")
           )}
         </Button>
       </TableCell>
