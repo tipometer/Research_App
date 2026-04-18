@@ -29,6 +29,20 @@
 
 The worktree is at `/Users/balintkovacs/Work/ClaudeCode/Research_App/repo-c1-ai-pipeline` on branch `feat/c2a-hardening` (pushed to origin). `.env.local` has all 3 API keys, `node_modules` is installed. Start work there immediately — no additional setup.
 
+## ⚠️ Preflight safety notes — READ BEFORE ANY IMPLEMENTATION
+
+These 5 items are critical subagent reminders. If a task seems to conflict with these, THESE WIN:
+
+1. **`server/routers.ts` is NOT modified by C2a.** The cross-provider warning is **pure frontend logic** (AdminPanel.tsx `useMemo` hook). The admin `updateRouting` tRPC procedure already accepts `fallbackModel` (added in C1). If a task description or code sample implies a backend change to routers.ts, ignore it — spec §3.3 is authoritative.
+
+2. **`wasStreaming` flag: error-object property, NOT phase-name heuristic.** Inside `runPhase4Stream` (Task 5), mid-stream errors tag `err.wasStreaming = true` before rethrow. In `research-pipeline.ts` (Task 8), read `(error as any).wasStreaming === true` — do NOT use `currentPhase === "synthesis"` as a proxy. The heuristic is wrong when pre-stream fails AND the fallback also fails (phase is synthesis but was NOT streaming).
+
+3. **`runPhase2` + `runPhase3` prompt MUST include mandatory-citation language.** Task 4 Step 5 says "same pattern as runPhase1" — that explicitly includes the block "You MUST ground every claim with web search results. Cite at least 3 URLs inline. Do NOT answer from memory." Do not abbreviate. Without this, Gemini answers from pretraining memory and `groundingChunks` stays empty (Handoff §11.1).
+
+4. **Fallback path is one-shot.** The fallback call in `invokeNonGroundedFallback` (Task 4 Step 3) has NO Zod retry. If fallback response fails `schema.parse`, the error propagates — that is intentional per `executeWithFallback` design (one-shot pattern prevents infinite loops).
+
+5. **Task 4 Step 7 "Task 5" → "Task 7" typo.** Any reference to "some tests will need fixing in Task 5" should read "Task 7" (pipeline-phases.test.ts mock updates are in Task 7, not 5). Corrected in the current plan text.
+
 ---
 
 ## File Structure
@@ -777,7 +791,9 @@ async function invokeNonGroundedFallback<TSchema extends z.ZodSchema>(
   const jsonMatch = rawResult.text.match(/\{[\s\S]*\}/);
   const jsonText = jsonMatch ? jsonMatch[0] : rawResult.text;
   const parsed = schema.parse(JSON.parse(jsonText));
-  // No groundingMetadata available → empty sources
+  // Note: no Zod retry here — fallback path is intentionally one-shot per executeWithFallback design.
+  // If the fallback response fails Zod parse, the error propagates directly (user-visible fail).
+  // No groundingMetadata available → empty sources (fallback is non-grounded by design).
   return { data: parsed, sources: [] };
 }
 ```
@@ -845,9 +861,22 @@ REQUIRED PROCESS:
 
 - [ ] **Step 5: Similarly refactor `runPhase2` and `runPhase3`**
 
-For `runPhase2`, also sanitize `input.phase1Summary` using `wrapIndirect(..., "summary")` before embedding it.
+Apply the EXACT SAME pattern as `runPhase1`:
+1. Call `resolvePhaseWithFallback(phase)` at the top
+2. Sanitize user-derived inputs (`sanitizeUserInput` for `nicheName`; `wrapIndirect(..., "summary")` for phase-output summaries from prior phases)
+3. Build `messages` array with **BOTH** the `SECURITY_INSTRUCTION` system-prompt block AND the mandatory-citation language (exact same as runPhase1):
+   ```
+   "You MUST ground every claim with web search results. Cite at least 3 URLs inline. Do NOT answer from memory."
+   ```
+   **Do NOT drop the mandatory-citation instruction from runPhase2/3** — it is required for Gemini's `groundingChunks` to populate (per Handoff §11.1; without it the model tends to answer from pretraining memory).
+4. Wrap primary + fallback calls in `executeWithFallback` with `onFallback` closure
+5. Return the `PhaseResult<...>`
 
-For `runPhase3`, same pattern with `input.phase2Summary`.
+**Phase-specific details:**
+- `runPhase2`: input type `PhaseInput & { phase1Summary: string }`. Sanitize `nicheName`; wrap `phase1Summary` with `wrapIndirect(..., "summary")`. Schema is `GapDetectionSchema`.
+- `runPhase3`: input type `PhaseInput & { phase2Summary: string }`. Sanitize `nicheName`; wrap `phase2Summary` with `wrapIndirect(..., "summary")`. Schema is `DeepDivesSchema`.
+
+Each of them has its own `jsonShape` string (already defined in the current implementation — preserve them, only the input embedding and fallback wrapping change).
 
 - [ ] **Step 6: Update `invokeGrounded` signature + migrate ALL 3 call sites**
 
@@ -889,7 +918,7 @@ corepack pnpm test server/ai/pipeline-phases.test.ts
 corepack pnpm check
 ```
 
-Expected: Existing 9 tests may have breaking changes due to signature updates — some will need fixing in Task 5. For now, `pnpm check` should show 0 errors.
+Expected: Existing 9 tests may have breaking changes due to signature updates — **these will be fixed in Task 7** (pipeline-phases.test.ts mock updates). For now, `pnpm check` should show 0 errors.
 
 - [ ] **Step 8: Commit**
 
@@ -907,6 +936,8 @@ git push
 - Modify: `server/ai/pipeline-phases.ts`
 
 - [ ] **Step 1: Replace `runPhase4Stream` with streamStarted flag pattern**
+
+**IMPORTANT (wasStreaming flag wiring):** when the error is mid-stream, attach a `wasStreaming: true` marker to the error object before rethrow. This avoids the heuristic approach in `research-pipeline.ts` (which would be incorrect for pre-stream-fail-then-fallback-also-fails: that case throws from the synthesis phase but was NOT streaming).
 
 ```typescript
 export async function runPhase4Stream(
@@ -958,13 +989,21 @@ Return JSON with verdict, synthesisScore, scores, reportMarkdown (min 4000 chars
     return clampScores(SynthesisSchema.parse(final));
 
   } catch (err) {
-    if (streamStarted) throw err;
+    // Mid-stream error → tag with wasStreaming, rethrow (no fallback, user already saw partials)
+    if (streamStarted) {
+      const e = err as any;
+      e.wasStreaming = true;
+      throw e;
+    }
+
+    // Pre-stream error paths below: wasStreaming stays unset (= false in SSE event)
     if (!isFallbackEligible(err) || !fallback) throw err;
 
     const reason = err instanceof APICallError ? `${err.statusCode}: ${err.message}` : String(err);
     console.warn(`[synthesis] Pre-stream fail (${reason}). Fallback to ${fallback.model} non-streaming.`);
     options.onFallback?.(fallback.model, reason);
 
+    // Fallback also-fail path: error propagates without wasStreaming tag, since no partials were ever emitted
     const { output } = await generateText({
       model: fallback.client(fallback.model),
       output: Output.object({ schema: SynthesisSchema }),
@@ -1287,18 +1326,22 @@ const p1 = await runPhase1(input, { abortSignal, onFallback, userId });
 
 Repeat for Phase 2, 3. Phase 4 (`runPhase4Stream`) also gets `onFallback`.
 
-- [ ] **Step 3: Catch mid-stream failures and set wasStreaming flag**
+- [ ] **Step 3: Read `wasStreaming` flag from error object (not phase-name heuristic)**
 
-The `catch` block in research-pipeline.ts at the end — when `currentPhase === "synthesis"` and the error emerged from inside runPhase4Stream (not from pre-stream, which would have succeeded via fallback), set `wasStreaming: true`:
+The `wasStreaming` marker is attached to the error object INSIDE `runPhase4Stream` (see Task 5 Step 1) — mid-stream errors tag `err.wasStreaming = true`, pre-stream + fallback-also-fails errors do NOT get the tag. This is more accurate than inferring from phase name.
+
+In research-pipeline.ts catch block:
 
 ```typescript
 catch (error: any) {
   ...
-  const wasStreaming = currentPhase === "synthesis";  // simple heuristic: synthesis phase errors are mid-stream (pre-stream would have fallback-resolved)
+  const wasStreaming = (error as any).wasStreaming === true;
   sendEvent(res, { type: "pipeline_error", phase: currentPhase, message, retriable, wasStreaming });
   ...
 }
 ```
+
+**Why not heuristic `currentPhase === "synthesis"`**: the synthesis phase can fail in 3 distinct ways: (a) mid-stream (streamStarted=true, rethrown) — WAS streaming; (b) pre-stream with no fallback configured — was NOT streaming; (c) pre-stream fallback also fails — was NOT streaming. The heuristic `phase === synthesis` would be true in all 3, but only case (a) should set `wasStreaming: true`. The error-property approach distinguishes correctly.
 
 - [ ] **Step 4: TypeScript check + full test suite**
 
