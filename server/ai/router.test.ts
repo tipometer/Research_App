@@ -174,3 +174,107 @@ describe("resolvePhaseWithFallback", () => {
     warnSpy.mockRestore();
   });
 });
+
+import { encrypt, __resetMasterKeyForTesting } from "./crypto";
+
+describe("router — lookupApiKey with encryption (C2b)", () => {
+  const TEST_KEY_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  const KEY_BUF = Buffer.alloc(32, 0);
+
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let origNodeEnv: string | undefined;
+  let origMasterKey: string | undefined;
+  let origOpenaiKey: string | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    origNodeEnv = process.env.NODE_ENV;
+    origMasterKey = process.env.MASTER_ENCRYPTION_KEY;
+    origOpenaiKey = process.env.OPENAI_API_KEY;
+    process.env.MASTER_ENCRYPTION_KEY = TEST_KEY_B64;
+    __resetMasterKeyForTesting();
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (origNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = origNodeEnv;
+    if (origMasterKey === undefined) delete process.env.MASTER_ENCRYPTION_KEY;
+    else process.env.MASTER_ENCRYPTION_KEY = origMasterKey;
+    if (origOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = origOpenaiKey;
+    __resetMasterKeyForTesting();
+    warnSpy.mockRestore();
+  });
+
+  function mockDbReturnsApiKey(apiKey: string) {
+    (getDb as any).mockResolvedValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => [{ apiKey }] }),
+        }),
+      }),
+    });
+  }
+
+  function mockDbReturnsNoRow() {
+    (getDb as any).mockResolvedValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => [] }),
+        }),
+      }),
+    });
+  }
+
+  it("decrypts an ENC1: row from DB", async () => {
+    process.env.NODE_ENV = "development";
+    const pt = "sk-openai-plaintext-key-xxx";
+    const ct = encrypt(pt, KEY_BUF, "aiConfig:openai");
+    mockDbReturnsApiKey(ct);
+    const result = await lookupApiKey("openai");
+    expect(result).toBe(pt);
+    // No WARN because ENC1: prefix matched decrypt path
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("Plaintext API key detected")
+    );
+  });
+
+  it("returns plaintext row unchanged (lazy migration) + WARN in dev", async () => {
+    process.env.NODE_ENV = "development";
+    const pt = "sk-plaintext-legacy-key";
+    mockDbReturnsApiKey(pt);
+    const result = await lookupApiKey("openai");
+    expect(result).toBe(pt);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Plaintext API key detected")
+    );
+  });
+
+  it("returns plaintext silently in production (no WARN)", async () => {
+    process.env.NODE_ENV = "production";
+    mockDbReturnsApiKey("sk-plaintext-legacy-key");
+    await lookupApiKey("openai");
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls through to ENV when DB row is missing", async () => {
+    process.env.NODE_ENV = "development";
+    mockDbReturnsNoRow();
+    process.env.OPENAI_API_KEY = "env-fallback-key";
+    const result = await lookupApiKey("openai");
+    expect(result).toBe("env-fallback-key");
+  });
+
+  it("throws DecryptionError when ENC1: row is corrupted", async () => {
+    process.env.NODE_ENV = "development";
+    const ct = encrypt("good", KEY_BUF, "aiConfig:openai");
+    // Corrupt the tag segment (last base64 chunk)
+    const parts = ct.split(":");
+    const tagBuf = Buffer.from(parts[3], "base64");
+    tagBuf[0] = tagBuf[0] ^ 0xff;
+    parts[3] = tagBuf.toString("base64");
+    mockDbReturnsApiKey(parts.join(":"));
+    await expect(lookupApiKey("openai")).rejects.toThrow(/Decryption failed|DecryptionError/);
+  });
+});
