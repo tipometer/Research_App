@@ -159,14 +159,16 @@ const handleStart = () => {
 
 UI-ban marad, checkbox state csak — NEM küldjük backend-re (nincs research.create input field). Dokumentálva code comment-ben hogy "future sprint: post-research auto-survey trigger". Ez kompatibilitást tart a UI design-nal minimal changes-szel.
 
-### 4.5 Strategy UI→backend enum mapping
+### 4.5 Strategy UI→backend enum mapping (confirmed: no mapper needed)
 
-Backend vár: `"gaps" | "predator" | "provisioning"`.
-UI valószínűleg `"Gyors" / "Alapos" / "Agresszív"` labeleket használ. Task 0.3 audit kideríti a jelenlegi state-et. Ha szükséges, egy kis mapper:
+Verified during spec review (2026-04-20): `NewResearch.tsx:44` already stores backend enum values directly (`"gaps" | "predator" | "provisioning"`) in state. UI button labels are translated via `t()` but the underlying state value passed to the mutation is already the correct backend enum.
+
+**No mapper function required.** The `strategy` field passes through as-is:
 ```typescript
-const STRATEGY_MAP = { quick: "gaps", deep: "predator", aggressive: "provisioning" } as const;
+createMutation.mutate({ ..., strategy: selectedStrategy });
 ```
-Ha a UI state már a backend enum-ot tárolja közvetlenül, no mapping needed.
+
+Task 0.3 reduces to a one-line sanity check (`grep -n 'useState' NewResearch.tsx`) to confirm this hasn't changed by the time the implementation runs.
 
 ---
 
@@ -205,7 +207,7 @@ const hasError = researchesQuery.error || creditsQuery.error;
 
 1. **Loading** — skeleton placeholders a list + stats widget-ekben (shadcn/ui `<Skeleton />` ha dep, egyébként CSS placeholder)
 2. **Error** — top banner: "Hiba történt, frissítsd az oldalt" + retry button (`researchesQuery.refetch(); creditsQuery.refetch()`)
-3. **Empty** — `researches.length === 0 && !isLoading` → "Még nincs kutatásod" message + CTA to `/new-research`
+3. **Empty** — `researches.length === 0 && !isLoading` → "Még nincs kutatásod" message + CTA to `/research/new`
 4. **Populated** — list card-okkal, click navigation status alapján:
    - `status === "done"` → `/research/:id` (report view)
    - `status === "running" || "pending"` → `/research/:id/progress` (SSE view)
@@ -213,13 +215,31 @@ const hasError = researchesQuery.error || creditsQuery.error;
 
 ### 5.4 Stats derivation
 
+The current Dashboard renders **4 stat cards** (verified at `Dashboard.tsx:66-70`): Összes kutatás, Befejezett, Kredit egyenleg, GO verdikt. Keep all four, derive from real data:
+
 ```typescript
-<Stat label={t("dashboard.stats.total")} value={researches.length} />
-<Stat label={t("dashboard.stats.credits")} value={userCredits} />
-<Stat label={t("dashboard.stats.goVerdicts")} value={goVerdictCount} />
+const doneCount = researches.filter((r) => r.status === "done").length;
+const goVerdictCount = researches.filter((r) => r.verdict === "GO").length;
+
+const stats = [
+  { key: "total",       label: "Összes kutatás",   value: researches.length, icon: BarChart3,     color: "text-blue-500" },
+  { key: "done",        label: "Befejezett",       value: doneCount,         icon: CheckCircle2,  color: "text-green-500" },
+  { key: "credits",     label: "Kredit egyenleg",  value: userCredits,       icon: Zap,           color: "text-yellow-500" },
+  { key: "goVerdicts",  label: "GO verdikt",       value: goVerdictCount,    icon: ChevronRight,  color: "text-primary" },
+];
+
+// Render: add data-testid on each Card for test-stability (avoid ambiguous regex
+// matches like /^0$/ which collide across multiple "0" counts during loading).
+stats.map((stat) => (
+  <Card key={stat.key} data-testid={`stat-${stat.key}`} className="border-border">
+    {/* existing structure */}
+  </Card>
+));
 ```
 
-Sem loading állapot, sem error — a `??` fallback adja `0` / `0` / `0` amíg a query-k pending-ek. `<Stat>` komponens opcionálisan skeleton-os loading mode-ot kaphat.
+Sem loading állapot dedikált logic — a `??` fallback adja `0` / `0` / `0` / `0` amíg a query-k pending-ek. Ha a vizuális tapasztalat a loading alatti `0`-kat zavarónak találja (pl. "Kredit egyenleg: 0" → "Kredit egyenleg: 100" jump), a jövőbeli iteráció skeleton-os `<Stat>` loading mode-ot kaphat (T2 scope).
+
+Labels i18n-izálhatók (`t("dashboard.stats.total")` stb.), de backward-compat a jelenlegi magyar hardcoded strings-szel — a meglévő `i18n/en.ts` / `hu.ts` ellenőrzi, vannak-e ezek a kulcsok (Task 3 közben).
 
 ---
 
@@ -233,16 +253,30 @@ corepack pnpm add -D @testing-library/react @testing-library/jest-dom @testing-l
 
 ### 6.2 `vitest.config.ts` patch
 
+The current config at `vitest.config.ts` scopes test discovery to `server/**` only. Must extend to include frontend tests AND add `setupFiles` for RTL+MSW bootstrap:
+
 ```typescript
+// vitest.config.ts — current state (verified 2026-04-20):
+// test: { environment: "node", include: ["server/**/*.test.ts", "server/**/*.spec.ts"] }
+
+// Target patch:
 export default defineConfig({
-  // existing config...
+  // root + resolve.alias unchanged
   test: {
-    setupFiles: ["./client/src/__tests__/setup.ts"],
+    environment: "node",  // default for backend tests (unchanged)
+    include: [
+      "server/**/*.test.ts",
+      "server/**/*.spec.ts",
+      "client/src/**/*.test.tsx",  // NEW — frontend tests
+    ],
+    setupFiles: ["./client/src/__tests__/setup.ts"],  // NEW — RTL + MSW bootstrap
     // environment per-file via /** @vitest-environment jsdom */ pragma
-    // (backend tests stay in node env)
+    // — backend tests stay in node env, frontend .test.tsx files opt into jsdom.
   },
 });
 ```
+
+**Critical:** without the `include` extension, `.test.tsx` files are ignored and 0 frontend tests run despite being written. Task 1 acceptance must verify `pnpm test` output includes the new test file paths.
 
 ### 6.3 Test file convention
 
@@ -317,12 +351,15 @@ Tesztek `server.use(mockTrpcMutation(...))` hívással felülírják a default-o
 
 ### 6.7 Render helper
 
+**Routing library: `wouter`** (verified — `client/src/App.tsx:4 import { Route, Switch } from "wouter"`, Dashboard + NewResearch both use wouter). NOT react-router-dom.
+
 ```typescript
 // client/src/__tests__/test-utils.tsx
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { httpBatchLink } from "@trpc/client";
-import { MemoryRouter } from "react-router-dom"; // or wouter
+import { Router } from "wouter";
+import { memoryLocation } from "wouter/memory-location";
 import { render, type RenderOptions } from "@testing-library/react";
 import { type ReactElement } from "react";
 
@@ -334,24 +371,33 @@ export function renderWithProviders(
   const trpcClient = trpc.createClient({
     links: [httpBatchLink({ url: "/api/trpc" })],
   });
+  // memoryLocation() returns [hookLike, memLoc]. memLoc exposes .history (array
+  // of visited paths) and .navigate(). Tests can inspect memLoc.history.at(-1)
+  // to assert navigation state after user interactions.
+  const [hook, memLoc] = memoryLocation({ path: options?.initialPath ?? "/" });
 
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={[options?.initialPath ?? "/"]}>
-            {children}
-          </MemoryRouter>
+          <Router hook={hook}>{children}</Router>
         </QueryClientProvider>
       </trpc.Provider>
     );
   }
 
-  return render(ui, { wrapper: Wrapper, ...options });
+  const result = render(ui, { wrapper: Wrapper, ...options });
+  // Expose memLoc so tests can inspect navigation history.
+  return { ...result, memoryLocation: memLoc };
 }
 ```
 
-**Task 0 verify:** a repo routing library (`react-router-dom` vs `wouter` vs `@tanstack/router`) kideríti a pontos import-ot. Infra Foundation audit hint: `client/src/App.tsx:36 <Route path="/admin" ...>` → standard react-router-like syntax.
+**Navigation assertions in tests** use `memLoc.history.at(-1)`, not `window.location.pathname`:
+```typescript
+const { memoryLocation: memLoc } = renderWithProviders(<NewResearch />);
+// ... user interaction ...
+await waitFor(() => expect(memLoc.history.at(-1)).toBe("/research/42/progress"));
+```
 
 ---
 
@@ -371,7 +417,7 @@ import NewResearch from "./NewResearch";
 
 describe("NewResearch", () => {
   it("renders form fields", async () => {
-    renderWithProviders(<NewResearch />, { initialPath: "/new-research" });
+    renderWithProviders(<NewResearch />, { initialPath: "/research/new" });
     expect(await screen.findByLabelText(/niche/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /(start|indítás)/i })).toBeInTheDocument();
   });
@@ -399,12 +445,11 @@ describe("NewResearch", () => {
 
   it("successful submit navigates to /research/:id/progress", async () => {
     server.use(mockTrpcMutation("research.create", { id: 42, shareToken: "abc123" }));
-    renderWithProviders(<NewResearch />);
+    const { memoryLocation: memLoc } = renderWithProviders(<NewResearch />);
     await userEvent.type(await screen.findByLabelText(/niche/i), "Test Niche");
     await userEvent.click(screen.getByRole("button", { name: /(start|indítás)/i }));
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/research/42/progress");
-      // or assert via mock navigate if using react-router
+      expect(memLoc.history.at(-1)).toBe("/research/42/progress");
     });
   });
 
@@ -466,15 +511,20 @@ describe("Dashboard", () => {
     expect(screen.getByText(/ev charging/i)).toBeInTheDocument();
   });
 
-  it("derives stats correctly (3 researches, 25 credits, 1 GO)", async () => {
-    // Same populated fixture as above
-    const researches = [ /* ...same 3... */ ];
+  it("derives stats correctly (3 researches, 2 done, 25 credits, 1 GO)", async () => {
+    const researches = [
+      { id: 1, nicheName: "Napelem HU", status: "done", verdict: "GO", createdAt: "2026-04-01T10:00:00Z" },
+      { id: 2, nicheName: "AI education", status: "done", verdict: "KILL", createdAt: "2026-04-02T10:00:00Z" },
+      { id: 3, nicheName: "EV charging", status: "running", verdict: null, createdAt: "2026-04-20T10:00:00Z" },
+    ];
     server.use(mockTrpcQuery("research.list", researches), mockTrpcQuery("user.credits", { credits: 25 }));
     renderWithProviders(<Dashboard />);
     await screen.findByText(/napelem/i);
-    expect(screen.getByText(/^3$/)).toBeInTheDocument(); // count
-    expect(screen.getByText(/^25$/)).toBeInTheDocument(); // credits
-    expect(screen.getByText(/^1$/)).toBeInTheDocument(); // GO count
+    // Scoped assertions via data-testid (no ambiguous regex against raw numbers)
+    expect(screen.getByTestId("stat-total")).toHaveTextContent("3");
+    expect(screen.getByTestId("stat-done")).toHaveTextContent("2");
+    expect(screen.getByTestId("stat-credits")).toHaveTextContent("25");
+    expect(screen.getByTestId("stat-goVerdicts")).toHaveTextContent("1");
   });
 
   it("done research card navigates to /research/:id (report)", async () => {
@@ -482,10 +532,10 @@ describe("Dashboard", () => {
       mockTrpcQuery("research.list", [{ id: 42, nicheName: "Foo", status: "done", verdict: "GO", createdAt: "" }]),
       mockTrpcQuery("user.credits", { credits: 1 })
     );
-    renderWithProviders(<Dashboard />);
+    const { memoryLocation: memLoc } = renderWithProviders(<Dashboard />);
     const card = await screen.findByText(/foo/i);
     await userEvent.click(card);
-    await waitFor(() => expect(window.location.pathname).toBe("/research/42"));
+    await waitFor(() => expect(memLoc.history.at(-1)).toBe("/research/42"));
   });
 
   it("running research card navigates to /research/:id/progress (SSE)", async () => {
@@ -493,10 +543,10 @@ describe("Dashboard", () => {
       mockTrpcQuery("research.list", [{ id: 43, nicheName: "Bar", status: "running", verdict: null, createdAt: "" }]),
       mockTrpcQuery("user.credits", { credits: 1 })
     );
-    renderWithProviders(<Dashboard />);
+    const { memoryLocation: memLoc } = renderWithProviders(<Dashboard />);
     const card = await screen.findByText(/bar/i);
     await userEvent.click(card);
-    await waitFor(() => expect(window.location.pathname).toBe("/research/43/progress"));
+    await waitFor(() => expect(memLoc.history.at(-1)).toBe("/research/43/progress"));
   });
 });
 ```
@@ -533,7 +583,7 @@ After PR merge → deploy-staging.yml green → new revision Ready:
 1. **Credits seed** per §8. Verify: `affected rows: 1`.
 2. **Proxy + dev login:** `gcloud run services proxy` + browser URL-encoded `/dev/login?key=...`
 3. **Dashboard smoke** `/dashboard`: credits=100, 0 kutatás, empty state CTA visible
-4. **NewResearch submit** `/new-research`: form fill → submit → redirect `/research/<ID>/progress` with numeric ID
+4. **NewResearch submit** `/research/new`: form fill → submit → redirect `/research/<ID>/progress` with numeric ID
 5. **DB verify:** `SELECT ... FROM researches ORDER BY createdAt DESC LIMIT 1` → 1 row, nicheName matches
 6. **Dashboard refresh:** credits=99, 1 research card visible
 7. **Insufficient credits test:** `UPDATE users SET credits=0 ...`, submit form → toast "Nincs elég kredit", no crash, re-seed credits
