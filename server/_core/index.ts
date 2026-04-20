@@ -50,6 +50,15 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
+  // Trust the proxy layer in front of the app (Cloud Run, localhost proxy, etc.).
+  // Without this, Express ignores X-Forwarded-For and express-rate-limit:
+  //   (a) buckets every request under the Cloud Run front-end IP (rate limit broken),
+  //   (b) emits ValidationError (ERR_ERL_FORWARDED_HEADER) at ERROR severity on
+  //       every rate-limited request, flooding Cloud Logging.
+  // 'true' trusts all proxies; tighten later (e.g. 'loopback, linklocal, uniquelocal')
+  // if the deployment topology needs a stricter chain.
+  app.set("trust proxy", true);
+
   // ── Security: Helmet + CSP ────────────────────────────────────────────────
   app.use(helmet({
     contentSecurityPolicy: {
