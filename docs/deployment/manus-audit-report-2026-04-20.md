@@ -5,6 +5,8 @@
 
 **Finding:** 5 of 6 scaffold files have 0 live imports (storage, map, voiceTranscription, imageGeneration, dataApi). `notification.ts` is LIVE (systemRouter.ts:2 → routers.ts:50 → appRouter). See Task 2 ERRATA in `docs/superpowers/plans/2026-04-20-infra-foundation-staging.md`.
 
+**Client-side Manus artifacts (out of scope):** `client/src/const.ts` + `client/public/__manus__/debug-collector.js` contain Manus references. Client-side artifacts unrelated to the server-side Infra Foundation sprint; decommission tracked under the future Manus-decommission / Auth migration sprint.
+
 ---
 
 ═══════════════════════════════════════════════════════

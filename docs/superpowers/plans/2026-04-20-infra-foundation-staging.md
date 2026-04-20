@@ -76,7 +76,7 @@ Non-negotiable rules. If a task step appears to conflict, these win:
 
 8. **Secret names: kebab-case, exact-match between bootstrap script + deploy workflow + runtime env var mapping.** See spec §13.1. `master-encryption-key` (Secret Manager) → `MASTER_ENCRYPTION_KEY` (env var). Any mismatch → Cloud Run "Secret not found" at deploy.
 
-9. **Task commits: one logical change per commit, NEVER squash within a task.** The Manus scaffold cleanup task (Task 2) produces 4 separate commits (audit, aws-sdk, scaffold files, env bindings) — preserved individually so `git bisect` works if a future refactor breaks something.
+9. **Task commits: one logical change per commit, NEVER squash within a task.** The Manus scaffold cleanup task (Task 2) produces **3 separate commits per ERRATA** (audit, aws-sdk, scaffold files) — preserved individually so `git bisect` works if a future refactor breaks something. (Originally plan said 4 commits including env-binding cleanup; the ERRATA in §Task 2 removed that commit because `notification.ts` is LIVE.)
 
 10. **`--set-secrets` flag references `:latest` by default.** Cloud Run resolves at container start with the runtime SA's `secretAccessor`. The `deploy-sa` has **zero** Secret Manager permissions. If a `gcloud run deploy` fails with a secret error, it's the runtime SA's per-secret binding that's missing — not the deploy SA.
 
