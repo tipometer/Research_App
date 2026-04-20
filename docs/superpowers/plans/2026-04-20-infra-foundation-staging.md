@@ -107,15 +107,15 @@ Non-negotiable rules. If a task step appears to conflict, these win:
 | **Create** `.github/workflows/deploy-staging.yml` | Main push: docker build + AR push + Cloud Run deploy (WIF) | Task 9 |
 | **Modify** `server/_core/index.ts` | Call `registerDevLoginIfEnabled(app)`, DB smoke-query + `startup_complete` log in `server.listen` callback | Task 6 |
 | **Modify** `server/db.ts` | `getDb()` internals: pool-based `mysql.createPool` with TLS config | Task 6 |
-| **Modify** `server/_core/env.ts` | Remove `forgeApiUrl`, `forgeApiKey` bindings (dead after Task 2 cleanup) | Task 2 |
-| **Modify** `env.local.example` | Remove `BUILT_IN_FORGE_*` lines from example | Task 2 |
+| ~~**Modify** `server/_core/env.ts`~~ | ~~Remove forgeApiUrl/forgeApiKey~~ — **CANCELED** per Task 2 ERRATA (bindings still used by live notification.ts) | — |
+| ~~**Modify** `env.local.example`~~ | ~~Remove BUILT_IN_FORGE_*~~ — **CANCELED** per Task 2 ERRATA | — |
 | **Modify** `package.json` | Add `"packageManager": "pnpm@X.Y.Z"` if missing; remove `@aws-sdk/*` deps | Task 0 + Task 2 |
-| **Delete** `server/storage.ts` | Dead Manus Forge storage proxy | Task 2 |
-| **Delete** `server/_core/map.ts` | Dead Manus Google Maps proxy | Task 2 |
-| **Delete** `server/_core/voiceTranscription.ts` | Dead Manus STT proxy | Task 2 |
-| **Delete** `server/_core/imageGeneration.ts` | Dead Manus image gen proxy | Task 2 |
-| **Delete** `server/_core/dataApi.ts` | Dead Manus data API proxy | Task 2 |
-| **Delete** `server/_core/notification.ts` | Dead Manus push notif proxy | Task 2 |
+| **Delete** `server/storage.ts` | Dead — only dead `imageGeneration.ts` imported it | Task 2 |
+| **Delete** `server/_core/map.ts` | Dead — 0 imports | Task 2 |
+| **Delete** `server/_core/voiceTranscription.ts` | Dead — 0 real imports (JSDoc comment only) | Task 2 |
+| **Delete** `server/_core/imageGeneration.ts` | Dead — 0 imports | Task 2 |
+| **Delete** `server/_core/dataApi.ts` | Dead — 0 imports | Task 2 |
+| ~~**Delete** `server/_core/notification.ts`~~ | ~~Dead~~ — **KEPT** per Task 2 ERRATA: LIVE via `systemRouter.ts` → `routers.ts:50` (appRouter). Manus-decommission sprint will handle. | — |
 
 **Cloud resources (not files, but artifacts to create):**
 
@@ -308,12 +308,17 @@ git commit -m "chore: add Manus scaffold audit script for pre-containerization c
 
 ---
 
-## Task 2: Dead Manus scaffold cleanup (4 commits, NEVER squash)
+## Task 2: Dead Manus scaffold cleanup (3 commits, NEVER squash)
+
+> **ERRATA 2026-04-20 (post-Task-1-audit):** The plan originally called for 4 commits including an `env.ts` cleanup (remove `forgeApiUrl`/`forgeApiKey`). The Task 1 audit output revealed that `server/_core/notification.ts` is LIVE (imported by `server/_core/systemRouter.ts` at line 2 → mounted into `server/routers.ts:50` as `system: systemRouter` → live in `appRouter`). `notification.ts` uses `ENV.forgeApiUrl`/`ENV.forgeApiKey` (4 references), so those env bindings are NOT dead. Revised scope: delete 5 scaffold files (not 6), keep `notification.ts` + `env.ts` forge bindings untouched. The `system.notifyOwner` tRPC procedure stays as-is (it fails at runtime in staging because Manus Forge is unreachable, but that's pre-existing behavior — the Auth / Manus-decommission sprint will handle it). This task now has 3 commits, not 4.
 
 **Files:**
 - Create: `docs/deployment/manus-audit-report-YYYY-MM-DD.md`
-- Modify: `package.json`, `pnpm-lock.yaml`, `server/_core/env.ts`, `env.local.example`
-- Delete: `server/storage.ts`, `server/_core/map.ts`, `server/_core/voiceTranscription.ts`, `server/_core/imageGeneration.ts`, `server/_core/dataApi.ts`, `server/_core/notification.ts`
+- Modify: `package.json`, `pnpm-lock.yaml`
+- Delete: `server/storage.ts`, `server/_core/map.ts`, `server/_core/voiceTranscription.ts`, `server/_core/imageGeneration.ts`, `server/_core/dataApi.ts` (5 files)
+- **KEEP** `server/_core/notification.ts` (live via systemRouter)
+- **KEEP** `server/_core/env.ts` `forgeApiUrl` + `forgeApiKey` (still used by notification.ts)
+- **KEEP** `env.local.example` `BUILT_IN_FORGE_*` lines (still relevant for live notification.ts usage)
 
 **Commit 1: audit evidence**
 
@@ -375,17 +380,17 @@ git add package.json pnpm-lock.yaml
 git commit -m "chore: remove unused @aws-sdk dependencies"
 ```
 
-**Commit 3: delete 6 Manus scaffold files**
+**Commit 3: delete 5 Manus scaffold files (NOT notification.ts — it's live via systemRouter)**
 
-- [ ] **Step 8: Delete the scaffold files**
+- [ ] **Step 8: Delete the 5 dead scaffold files**
 
 ```bash
 rm server/storage.ts \
    server/_core/map.ts \
    server/_core/voiceTranscription.ts \
    server/_core/imageGeneration.ts \
-   server/_core/dataApi.ts \
-   server/_core/notification.ts
+   server/_core/dataApi.ts
+# NOT: server/_core/notification.ts (LIVE — see Task 2 ERRATA note above)
 ```
 
 - [ ] **Step 9: Verify tsc still passes**
@@ -422,55 +427,13 @@ git show HEAD:server/<file-that-was-dynamically-imported> > server/<file>
 
 ```bash
 git add server/storage.ts server/_core/map.ts server/_core/voiceTranscription.ts \
-        server/_core/imageGeneration.ts server/_core/dataApi.ts server/_core/notification.ts
-git commit -m "chore: delete unused Manus scaffold modules"
+        server/_core/imageGeneration.ts server/_core/dataApi.ts
+git commit -m "chore: delete unused Manus scaffold modules (5 files; notification.ts kept — live via systemRouter)"
 ```
 
-Note: `git add` on a deleted file stages the deletion. `git status` should show all 6 as `deleted:`.
+Note: `git add` on a deleted file stages the deletion. `git status` should show 5 as `deleted:`. **notification.ts is NOT deleted** — per ERRATA at top of Task 2.
 
-**Commit 4: remove dead Manus env bindings**
-
-- [ ] **Step 13: Edit `server/_core/env.ts` — remove `forgeApiUrl` and `forgeApiKey`**
-
-After the edit, the file should contain 6 bindings (not 8):
-```typescript
-export const ENV = {
-  appId: process.env.VITE_APP_ID ?? "",           // Manus OAuth — Auth sprint scope
-  cookieSecret: process.env.JWT_SECRET ?? "",     // core — JWT sign
-  databaseUrl: process.env.DATABASE_URL ?? "",    // core — Drizzle
-  oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",  // Manus OAuth — Auth sprint scope
-  ownerOpenId: process.env.OWNER_OPEN_ID ?? "",   // Manus OAuth — Auth sprint scope
-  isProduction: process.env.NODE_ENV === "production",
-  // forgeApiUrl, forgeApiKey — REMOVED (Manus Forge proxy scaffolds deleted in Task 2 commit 3)
-};
-```
-
-- [ ] **Step 14: Edit `env.local.example` — remove `BUILT_IN_FORGE_*` lines**
-
-Delete any lines containing `BUILT_IN_FORGE_API_URL` or `BUILT_IN_FORGE_API_KEY`.
-
-- [ ] **Step 15: Verify tsc still passes**
-
-```bash
-corepack pnpm check
-```
-Expected: 0 errors.
-
-- [ ] **Step 16: Verify tests still pass**
-
-```bash
-corepack pnpm test
-```
-Expected: 203 passing.
-
-- [ ] **Step 17: Commit 4**
-
-```bash
-git add server/_core/env.ts env.local.example
-git commit -m "chore: remove dead Manus env bindings"
-```
-
-- [ ] **Step 18: User checkpoint** — "Task 2 done. 4 commits (audit + aws-sdk + scaffold files + env bindings). All 203 tests still passing. Ready for Task 3 (logger)."
+- [ ] **Step 13: User checkpoint** — "Task 2 done (revised 3-commit scope). audit + aws-sdk + 5 scaffold files. All tests still passing. `notification.ts` + `env.ts` forge bindings deferred to Auth/Manus-decommission sprint. Ready for Task 3 (logger)."
 
 ---
 

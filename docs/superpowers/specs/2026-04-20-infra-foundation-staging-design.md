@@ -1,6 +1,8 @@
 # Infra Foundation Sprint — Staging Deploy Design
 
-**Verzió:** 1.0
+> **ERRATA 2026-04-20 (post-implementation-Task-1-audit):** The §7.2 and §9.2 decision matrices claim all 6 Manus scaffold files have 0 imports and are safe to delete. The Task 1 audit (`bin/manus-audit.sh` with broadened grep patterns) revealed that `server/_core/notification.ts` is LIVE: imported by `server/_core/systemRouter.ts` (line 2), which is mounted into `server/routers.ts:50` as `system: systemRouter`, which is the appRouter. Accordingly: **only 5 scaffold files are deleted in Task 2** (storage, map, voiceTranscription, imageGeneration, dataApi). `notification.ts` is kept, and the `env.ts` `forgeApiUrl` / `forgeApiKey` bindings stay (notification.ts uses them). The `system.notifyOwner` tRPC procedure fails at runtime on staging (Manus Forge unreachable), which is pre-existing behavior — deferred to the Auth / Manus-decommission sprint. See `docs/superpowers/plans/2026-04-20-infra-foundation-staging.md` Task 2 ERRATA.
+
+**Verzió:** 1.0 (errata 2026-04-20)
 **Dátum:** 2026-04-20
 **Scope:** Infra foundation sub-project (a V1 remainderből) — natív deploy off Manus platformról, staging környezetbe
 **Kontextus:** Deep Research app, migráció Manus platformról natív stackre. C1/C2a/C2b merged (PR #1-#6). Auth migráció, prod launch, storage, payment = külön sub-projektek.
