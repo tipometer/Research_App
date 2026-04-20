@@ -18,6 +18,10 @@ import rateLimit from "express-rate-limit";
 import { runResearchPipeline } from "../research-pipeline";
 import { sdk } from "./sdk";
 import { getMasterKey } from "../ai/crypto";
+import { registerDevLoginIfEnabled } from "../auth/dev-login";
+import { logger } from "./logger";
+import { sql } from "drizzle-orm";
+import { getDb } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -77,6 +81,10 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+  // ── Dev auth stub (staging only — triple-gated) ───────────────────────────
+  const devAuthEnabled = registerDevLoginIfEnabled(app);
+  // registerOAuthRoutes(app) remains untouched below (Auth sprint scope)
+
   // ── SSE Research Pipeline ─────────────────────────────────────────────────
   app.get("/api/research/:id/stream", async (req, res, next) => {
     try {
@@ -115,7 +123,45 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
+  server.listen(port, async () => {
+    // DB smoke-query with retry-with-backoff (TiDB Serverless auto-pause wake can take ~200ms)
+    const drz = await getDb();
+    if (!drz) {
+      logger.error({
+        event: "startup_db_check_failed",
+        reason: "getDb() returned null (DATABASE_URL unset or connection failed)",
+      });
+      process.exit(1);
+    }
+
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await drz.execute(sql`SELECT 1`);
+        lastErr = undefined;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 3) {
+          logger.warn({ event: "startup_db_check_retry", attempt, error: String(err) });
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
+    }
+    if (lastErr) {
+      logger.error({ event: "startup_db_check_failed", error: String(lastErr) });
+      process.exit(1);
+    }
+
+    // Startup success marker
+    logger.info({
+      event: "startup_complete",
+      port,
+      nodeEnv: process.env.NODE_ENV,
+      devAuthEnabled,
+    });
+
+    // Existing plain log — keep alongside for local dev readability
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
