@@ -40,16 +40,16 @@ A sprint végén nem kerül a kód prod-ba: a staging egy elkötelezett „clean
 - `docs/deployment/cloud-logging-queries.md` (saved queries, §8.2)
 
 **Kódváltozások:**
-- `server/auth/dev-login.ts` (új modul — `registerDevLoginIfEnabled`, `devLoginHandler`, `devAuthMiddleware`, `ensureDevUserExists`)
-- `server/_core/index.ts` (integráció: `registerDevLoginIfEnabled(app)` + Manus middleware feltételes mount + `/health` endpoint + `startup_complete` log)
+- `server/auth/dev-login.ts` (új modul — `registerDevLoginIfEnabled`, `devLoginHandler`, `ensureDevUserExists`. **Nincs** külön `devAuthMiddleware` — a meglévő `sdk.authenticateRequest` kezeli az auth-ot)
+- `server/_core/index.ts` (minimal diff: `registerDevLoginIfEnabled(app)` hívás a meglévő `registerOAuthRoutes(app)` ELŐTT, DB smoke-query + `startup_complete` log a `server.listen` callback-en)
 - `server/_core/logger.ts` (új, structured JSON logging shim)
 - `server/db.ts` (TiDB TLS config beépítése)
 - `server/_core/env.ts` (szelektív cleanup: `forgeApiUrl`, `forgeApiKey` törlés)
-- `server/__tests__/dev-login-gate.test.ts` (új, 3 teszt)
-- `server/__tests__/dev-login-handler.test.ts` (új, ~6 teszt)
+- `server/__tests__/dev-login-gate.test.ts` (új, 3 teszt a triple-gate-re)
+- `server/__tests__/dev-login-handler.test.ts` (új, ~6 teszt a handler + seed logikára)
 - 6 Manus scaffold file törlése (`server/storage.ts`, `server/_core/map.ts`, `server/_core/voiceTranscription.ts`, `server/_core/imageGeneration.ts`, `server/_core/dataApi.ts`, `server/_core/notification.ts`)
 - `@aws-sdk/client-s3` és `@aws-sdk/s3-request-presigner` dep eltávolítás
-- `express-rate-limit` dep hozzáadás
+- `express-rate-limit` dep már jelen van (a meglévő `generalLimiter` / `authLimiter` / `researchLimiter` használja — nem kell új dep, csak újabb instance a dev-login handler-hez)
 
 **Cloud resource-ok (one-time manual setup, dokumentált `gcloud` parancsokkal):**
 - GCP projekt (`deep-research-staging-XXX`) + API-k engedélyezése
@@ -88,39 +88,40 @@ A sprint „Done" kritériumai (mind teljesülnie kell):
 
 Az implementáció bármelyik task-ja ELŐTT futtasd:
 
-**Task 0.1 — tRPC context field audit.** Nyisd meg a `server/_core/trpc.ts` és `server/_core/context.ts` file-okat, grep-eld:
-```bash
-grep -rnE "req\.user|req\.auth|req\.manusUser|ctx\.user|ctx\.auth" \
-  --include="*.ts" server/
-```
+**Task 0.1 — Auth topology verify.** Olvasd át a `server/_core/sdk.ts`, `server/_core/context.ts`, `server/_core/index.ts` és `server/_core/oauth.ts` file-okat, és erősítsd meg, hogy az alábbi pattern változatlanul érvényes (ez a spec §8 teljes tervét alapozza meg):
 
-Dokumentáld:
-- A tRPC context builder melyik request-field-ből olvassa a user-t? (várható: `req.user`, de lehet `req.manusUser` vagy `req.auth`)
-- Milyen shape-et vár? (`{ id, email, role }`? `{ id, openId }`? stb.)
+- `COOKIE_NAME = "app_session_id"` a `@shared/const`-ból
+- `sdk.createSessionToken(openId, { name, expiresInMs })` → JWT-t (HS256, `jose` lib) aláír az `ENV.cookieSecret` (= `JWT_SECRET` env var) secretvel
+- `sdk.authenticateRequest(req)` → parsolja az `app_session_id` cookie-t, `verifySession`-nel verifikálja, `db.getUserByOpenId(openId)`-val betölti a User-t, ha hiányzik → `getUserInfoWithJwt` (Manus API) fallback → `upsertUser` → retry
+- `createContext` (tRPC): `sdk.authenticateRequest(opts.req)` → `ctx.user`
+- `/api/research/:id/stream` SSE handler: `sdk.authenticateRequest(req)` → `(req as any).user = user`
+- **Nincs** middleware-alapú auth. Nincs `manusAuthMiddleware` export.
 
-Ennek alapján:
-- Ha `req.user` mezőt olvas → a §6 `devAuthMiddleware` `(req as any).user = {...}` implementációja változtatás nélkül jó
-- Ha más field-et olvas → a `devAuthMiddleware`-t ahhoz kell igazítani (ugyanazt a field-et kell írnia)
-- **SOHA ne** módosítsd a tRPC context builder-t, hogy Manus-specifikus field helyett `req.user`-t olvasson — az az Auth sprint scope-ja
+Ennek következménye a spec §8-ra: a dev stub **NEM** vezet be parallel auth middleware-t. Csak egy `/dev/login` endpoint, ami a SDK-kompatibilis session cookie-t állít be. Az `sdk.authenticateRequest` utána a seeded DB user row-t megtalálja és visszaadja — semmi más nem módosul az auth topológiában.
 
-**Task 0.2 — `users` schema audit.** Nyisd meg `drizzle/schema.ts` (vagy ami a users tábla schema definíciója) és jegyezd le a column neveket:
-- `email` vagy `emailAddress`?
-- `role` enum vagy string? `'admin'` érték valid-e?
-- `name` vagy `displayName`?
-- `emailVerified` flag kötelező-e? (a seeded `dev-admin@staging.local`-nak állítsd `true`-ra)
+**Acceptance:** `docs/deployment/task-0-audit-findings.md` file commit-olva, amelyben a fenti 6 pont verify-álva van a current codebase-re.
 
-Az `ensureDevUserExists` seed logika ezeket a pontos column-neveket fogja használni.
+**Task 0.2 — `users` schema column audit.** Nyisd meg `drizzle/schema.ts`-t, jegyezd fel:
+- `openId: varchar(64).notNull().unique()` — **KRITIKUS**, a seed insert kötelezően állítja
+- `name: text("name")` — nullable, de állítsuk be értelmes értékre
+- `email: varchar("email", 320)` — nullable, állítsuk a dev email-re
+- `loginMethod: varchar("loginMethod", 64)` — nullable, `"dev-stub"` érték
+- `role: mysqlEnum(["user", "admin"]).default("user").notNull()` — seed-hez `role: "admin"` explicit kell
+- `credits, language, createdAt, updatedAt, lastSignedIn` — default értékkel maguktól mennek
+- `id: int.autoincrement().primaryKey()` — auto, nem kell
 
-**Task 0.3 — `packageManager` field verify.** A `package.json`-ban van-e `"packageManager": "pnpm@X.Y.Z"` field? Ha nincs, adj hozzá:
+Ha a schema változott C2b óta (új column), a seed hozzáadja; ha egy column `.notNull()`-ra lett téve, a seed-be default érték kell. A §8.2 `ensureDevUserExists` logika ezeket a neveket használja.
+
+**Task 0.3 — `packageManager` field verify.** A `package.json`-ban van-e `"packageManager": "pnpm@X.Y.Z"` field? Ha nincs:
 ```bash
 pnpm --version  # → aktuális lokális verzió
-# majd manuálisan a package.json-ba:
+# majd a package.json-ba:
 #   "packageManager": "pnpm@9.12.3"
-# (kiolvasott verzió, nem major-only)
+# (pontos verzió, nem major-only)
 pnpm install --frozen-lockfile  # verify: nem módosítja a lockfile-t
 ```
 
-**Task 0 acceptance:** egy rövid `docs/deployment/task-0-audit-findings.md` file committed a repo-ba, amiben a fenti 3 audit output-ja dokumentálva van. Nélküle a §6 auth stub implementációja találgatáson alapulna.
+**Task 0 acceptance:** `docs/deployment/task-0-audit-findings.md` file committed, minden 3 alpont output dokumentálva. Ezek NÉLKÜL nem indul a §8 implementáció.
 
 ---
 
@@ -646,33 +647,45 @@ gcloud secrets add-iam-policy-binding dev-login-key \
 
 ## 8. Auth stub design (`server/auth/dev-login.ts`)
 
-### 8.1 Architektúra: triple-gated registration
+### 8.1 Architektúra: SDK-kompatibilis session cookie, nincs parallel middleware
 
-A triple-gate **három dolgot** kapcsol ki egyszerre:
+**Kulcs insight (Task 0.1 audit alapján):** a meglévő auth topológia SDK-based, nem middleware-based. A `sdk.authenticateRequest(req)` parsolja az `app_session_id` cookie-t, `jose`-val verifikálja (HS256, `JWT_SECRET`-tal), majd `db.getUserByOpenId(openId)`-val betölti a User-t. Ez történik a tRPC `createContext`-ben és az `/api/research/:id/stream` SSE handler-ben is.
 
-1. `/dev/login` route regisztrációja
-2. `devAuthMiddleware` mount (a `/api/*`-ra)
-3. Seeded `dev-admin-staging` user row (lazy idempotent)
+**Ezért a dev stub NEM vezet be új middleware-t.** Ehelyett:
+1. Egy `/dev/login` endpoint validálja a `DEV_LOGIN_KEY`-t
+2. A helyes kulccsal `sdk.createSessionToken(openId, ...)` (vagy egy SDK-kompatibilis közvetlen `jose.SignJWT`) → `app_session_id` cookie set
+3. A meglévő `sdk.authenticateRequest` innentől magától működik — megtalálja a seeded dev user row-t a DB-ben, visszaadja a User objektumot a tRPC ctx-be és az SSE handler-be. **Nincs szükség dev-specifikus middleware-re, nincs `ctx.user` field-mapping probléma.**
 
-Nincs részleges „disabled but reachable" állapot.
+Triple-gate változatlan:
+1. `/dev/login` route regisztrációja csak `NODE_ENV !== "production"` ÉS `ENABLE_DEV_LOGIN === "true"` esetén
+2. A route registration maga `if`-alá gated (nem „disabled but reachable")
+3. A seeded `dev-admin-staging` user row létrehozása lazy (első `/dev/login` hívásnál)
 
-### 8.2 `registerDevLoginIfEnabled(app)` — az unified gate
+### 8.2 `registerDevLoginIfEnabled(app)` — unified gate + seed
 
 ```typescript
 // server/auth/dev-login.ts
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, Request, Response } from "express";
 import { timingSafeEqual } from "crypto";
-import jwt from "jsonwebtoken";
+import { SignJWT } from "jose";
 import rateLimit from "express-rate-limit";
-import { db } from "../db";
-import { users } from "../../drizzle/schema";
 import { eq } from "drizzle-orm";
+import { COOKIE_NAME } from "@shared/const";
+import { db } from "../db";              // drizzle client
+import { users } from "../../drizzle/schema";
 import { logger } from "../_core/logger";
 
-const DEV_USER_SUB = "dev-admin-staging";
-const DEV_USER_EMAIL = "dev-admin@staging.local";
-const COOKIE_NAME = "dev_session";
-const COOKIE_MAX_AGE_MS = 12 * 60 * 60 * 1000;  // 12 óra
+// Fix identitás a dev admin-nak. A sdk.verifySession megköveteli
+// { openId, appId, name } mindhárom non-empty. A staging-en VITE_APP_ID
+// nincs beállítva, ezért egy dummy non-empty "staging-dev" appId-t használunk
+// — a sdk.authenticateRequest nem használja az appId-t user lookup-hoz,
+// csak a verifySession non-empty check-jéhez kell.
+const DEV_OPENID = "dev-admin-staging";
+const DEV_NAME = "Dev Admin (staging)";
+const DEV_EMAIL = "dev-admin@staging.local";
+const DEV_APPID = "staging-dev";
+const DEV_LOGIN_METHOD = "dev-stub";
+const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;  // 12 óra
 
 let seeded = false;
 
@@ -682,7 +695,7 @@ export function registerDevLoginIfEnabled(app: Express): boolean {
     process.env.ENABLE_DEV_LOGIN === "true";
   if (!enabled) return false;
 
-  // Fast-fail validation — analóg a C2b getMasterKey()-jel
+  // Fast-fail validation (analóg a C2b getMasterKey()-jel)
   if (!process.env.DEV_LOGIN_KEY) {
     throw new Error("ENABLE_DEV_LOGIN=true but DEV_LOGIN_KEY is missing");
   }
@@ -691,27 +704,49 @@ export function registerDevLoginIfEnabled(app: Express): boolean {
   }
 
   app.get("/dev/login", devLoginHandler);
-  app.use("/api", devAuthMiddleware);
+  // NINCS middleware mount — sdk.authenticateRequest kezeli az auth-ot,
+  // ahogy jelenleg is, változtatás nélkül.
 
   return true;
 }
 
+/**
+ * Idempotent dev user seed. Drizzle insert-et használ közvetlenül (nem db.upsertUser-t),
+ * mert a role="admin" explicit kell, amit az upsertUser signature nem exponál.
+ * Ha a user már létezik, ellenőrzi a role-t, és szükség esetén update-eli admin-ra.
+ */
 async function ensureDevUserExists(): Promise<void> {
   if (seeded) return;
-  const existing = await db.select().from(users).where(eq(users.email, DEV_USER_EMAIL));
+  const existing = await db
+    .select()
+    .from(users)
+    .where(eq(users.openId, DEV_OPENID));
+
   if (existing.length === 0) {
-    // Task 0.2 audit alapján a pontos column-neveket kell használni
     await db.insert(users).values({
-      email: DEV_USER_EMAIL,
-      name: "Dev Admin (staging)",
+      openId: DEV_OPENID,
+      name: DEV_NAME,
+      email: DEV_EMAIL,
+      loginMethod: DEV_LOGIN_METHOD,
       role: "admin",
+      // credits, language, createdAt, updatedAt, lastSignedIn: default értékkel
     });
+    logger.info({ event: "dev_user_seeded", openId: DEV_OPENID });
+  } else if (existing[0].role !== "admin") {
+    // Elvileg nem fordulhat elő (a seed admin-nal írja), de ha külső behatás
+    // módosította, a dev stub-nak mindig admin-nak kell lennie.
+    await db
+      .update(users)
+      .set({ role: "admin" })
+      .where(eq(users.openId, DEV_OPENID));
+    logger.warn({ event: "dev_user_role_restored", openId: DEV_OPENID });
   }
+
   seeded = true;
 }
 ```
 
-### 8.3 `/dev/login` handler — timing-safe compare + rate limit + audit log
+### 8.3 `/dev/login` handler — timing-safe compare + rate limit + SDK-kompatibilis session cookie
 
 ```typescript
 const devLoginLimiter = rateLimit({
@@ -733,9 +768,8 @@ async function devLoginHandler(req: Request, res: Response) {
   const expectedKey = process.env.DEV_LOGIN_KEY!;
   const ip = req.ip;
 
-  // Timing-safe compare (KÖTELEZŐ, nem recommendation).
-  // Length check: a két buffer különböző hosszúságánál a timingSafeEqual dob.
-  // A length leak elfogadott: a DEV_LOGIN_KEY hossza (44 char, base64 32 byte) nem titok.
+  // Timing-safe compare (KÖTELEZŐ). A DEV_LOGIN_KEY hossza (44 char,
+  // base64 32 byte) publikus információ, nem titok — a length leak OK.
   let valid = false;
   if (typeof keyParam === "string") {
     const keyBuf = Buffer.from(expectedKey);
@@ -752,83 +786,78 @@ async function devLoginHandler(req: Request, res: Response) {
     return res.status(401).send("Unauthorized");
   }
 
-  const token = jwt.sign(
-    { sub: DEV_USER_SUB, email: DEV_USER_EMAIL, role: "admin" },
-    process.env.JWT_SECRET!,
-    {
-      expiresIn: "12h",
-      issuer: "research-app-staging",
-      audience: "research-app",
-    }
-  );
+  // SDK-kompatibilis session JWT: ugyanaz a HS256 algoritmus és ugyanaz a
+  // JWT_SECRET (ENV.cookieSecret), mint amit a sdk.verifySession vár.
+  // Payload: { openId, appId, name } — mindhárom non-empty (verifySession
+  // requirement). Ezzel az sdk.authenticateRequest változtatás nélkül működik.
+  const secretKey = new TextEncoder().encode(process.env.JWT_SECRET!);
+  const expirationSeconds = Math.floor((Date.now() + SESSION_MAX_AGE_MS) / 1000);
 
-  res.cookie(COOKIE_NAME, token, {
+  const sessionToken = await new SignJWT({
+    openId: DEV_OPENID,
+    appId: DEV_APPID,
+    name: DEV_NAME,
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setExpirationTime(expirationSeconds)
+    .sign(secretKey);
+
+  // COOKIE_NAME = "app_session_id" — ugyanaz, amit a sdk.authenticateRequest parsol.
+  res.cookie(COOKIE_NAME, sessionToken, {
     httpOnly: true,
     secure: true,         // Cloud Run mindig HTTPS
     sameSite: "lax",      // "strict" a redirect flow-t törné
-    maxAge: COOKIE_MAX_AGE_MS,
+    maxAge: SESSION_MAX_AGE_MS,
     path: "/",
   });
 
-  logger.info({ event: "dev_login_success", ip, sub: DEV_USER_SUB });
+  logger.info({ event: "dev_login_success", ip, openId: DEV_OPENID });
   res.redirect("/");
 }
 ```
 
-### 8.4 `devAuthMiddleware` — JWT verify → `ctx.user`
+### 8.4 Integráció a meglévő codebase-szel (MINIMÁLIS diff)
+
+Egyetlen hívás a `server/_core/index.ts` `startServer()`-ében, a helmet/rate-limit-ek UTÁN és az SSE route / tRPC mount ELŐTT:
 
 ```typescript
-async function devAuthMiddleware(req: Request, res: Response, next: NextFunction) {
-  const token = req.cookies?.[COOKIE_NAME];
-  if (!token) {
-    return res.status(401).json({ error: "No dev session" });
-  }
+// server/_core/index.ts (diff)
+import { getMasterKey } from "../ai/crypto";
+import { registerDevLoginIfEnabled } from "../auth/dev-login";  // ← új
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!, {
-      issuer: "research-app-staging",
-      audience: "research-app",
-    }) as jwt.JwtPayload;
+async function startServer() {
+  getMasterKey();
 
-    if (decoded.sub !== DEV_USER_SUB) {
-      return res.status(401).json({ error: "Invalid dev session subject" });
-    }
+  const app = express();
+  const server = createServer(app);
 
-    // ⚠️ Task 0.1 audit eredménye szerint: ha a tRPC context builder NEM req.user-ből
-    // olvassa a user-t, akkor a megfelelő field-be írni (req.manusUser, req.auth, stb.).
-    (req as any).user = {
-      id: DEV_USER_SUB,
-      email: DEV_USER_EMAIL,
-      role: "admin",
-    };
+  // ... meglévő helmet + rate-limit + body parser ...
 
-    next();
-  } catch (err) {
-    logger.warn({ event: "dev_session_invalid", error: String(err) });
-    return res.status(401).json({ error: "Invalid dev session" });
-  }
+  // Dev auth stub — csak staging/dev, triple-gated
+  registerDevLoginIfEnabled(app);   // ← új, a return value-t most nem használjuk
+
+  // ── meglévő: SSE, tRPC, vite/static ────────────────────────
+  app.get("/api/research/:id/stream", async (req, res, next) => { ... });
+  registerOAuthRoutes(app);         // ← változatlan (Auth sprint scope)
+  app.use("/api/trpc", createExpressMiddleware({ router: appRouter, createContext }));
+  // ... vite / serveStatic ...
+
+  server.listen(port, () => { ... });
 }
 ```
 
-### 8.5 Integráció a meglévő auth chain-nel
+**Nem kell** `manusAuthMiddleware` (nem is létezik). Nincs conditional middleware mount. A meglévő `registerOAuthRoutes(app)` (a `/api/oauth/callback` route-ot mount-olja) érintetlen — az Auth sprint fogja eltávolítani.
 
-A `server/_core/index.ts`-ben a Manus OAuth middleware marad (Auth sprint scope), de staging-en nem mountolódik:
+**Miért működik ez:**
+1. Staging user megnyitja `/dev/login?key=...`
+2. Helyes key → `app_session_id` cookie set (SDK-kompatibilis JWT-vel)
+3. Redirect `/`-re → frontend betölt → tRPC / SSE request cookie-val
+4. `sdk.authenticateRequest(req)` → parsolja cookie-t → `verifySession` OK (HS256 + JWT_SECRET) → `db.getUserByOpenId("dev-admin-staging")` → seeded User row megjön
+5. tRPC `ctx.user = User`, SSE `req.user = User` — minden normálisan működik
 
-```typescript
-// server/_core/index.ts
-import { registerDevLoginIfEnabled } from "../auth/dev-login";
-import { manusAuthMiddleware } from "./oauth";
+### 8.5 Guard tesztek — `server/__tests__/dev-login-gate.test.ts`
 
-const devAuthEnabled = registerDevLoginIfEnabled(app);
-if (!devAuthEnabled) {
-  // Production / non-dev path — meglévő Manus flow érintetlen
-  app.use("/api", manusAuthMiddleware);
-}
-```
-
-**Mutually exclusive:** dev auth aktív → Manus middleware nincs mountolva. Dev auth inaktív → csak Manus. Nincs „dev + Manus fallback" kombó, ami félkész állapotot produkálna production-ban.
-
-### 8.6 Guard tesztek — `dev-login-gate.test.ts`
+A triple-gate verify-álása. Kulcs: a harmadik teszt (ENABLE_DEV_LOGIN unset) garantálja, hogy a gate nem csak `=== "true"` ellenőrzést végez.
 
 ```typescript
 import { afterEach, describe, it, expect, vi } from "vitest";
@@ -841,11 +870,13 @@ describe("dev-login route gate", () => {
   it("registers /dev/login when NODE_ENV=staging + ENABLE_DEV_LOGIN=true", () => {
     vi.stubEnv("NODE_ENV", "staging");
     vi.stubEnv("ENABLE_DEV_LOGIN", "true");
-    vi.stubEnv("DEV_LOGIN_KEY", "test-key");
+    vi.stubEnv("DEV_LOGIN_KEY", "test-key-at-least-44-chars-long-xxxxxxxxxxxx");
     vi.stubEnv("JWT_SECRET", "test-secret");
     const app = express();
     registerDevLoginIfEnabled(app);
-    const hasDev = app._router.stack.some((l: any) => l.regexp?.source?.includes("dev"));
+    const hasDev = app._router.stack.some(
+      (l: any) => l.regexp?.source?.includes("dev")
+    );
     expect(hasDev).toBe(true);
   });
 
@@ -854,7 +885,9 @@ describe("dev-login route gate", () => {
     vi.stubEnv("ENABLE_DEV_LOGIN", "true");
     const app = express();
     registerDevLoginIfEnabled(app);
-    const hasDev = app._router.stack.some((l: any) => l.regexp?.source?.includes("dev"));
+    const hasDev = app._router.stack.some(
+      (l: any) => l.regexp?.source?.includes("dev")
+    );
     expect(hasDev).toBe(false);
   });
 
@@ -863,37 +896,39 @@ describe("dev-login route gate", () => {
     // ENABLE_DEV_LOGIN deliberately not stubbed
     const app = express();
     registerDevLoginIfEnabled(app);
-    const hasDev = app._router.stack.some((l: any) => l.regexp?.source?.includes("dev"));
+    const hasDev = app._router.stack.some(
+      (l: any) => l.regexp?.source?.includes("dev")
+    );
     expect(hasDev).toBe(false);
   });
 });
 ```
 
-A harmadik teszt kritikus: verify-álja, hogy a gate nem csak `=== "true"` ellenőrzést végez, hanem az unset állapotot is explicit false-ként kezeli.
-
-### 8.7 Handler tesztek — `dev-login-handler.test.ts` (~6 eset)
+### 8.6 Handler tesztek — `server/__tests__/dev-login-handler.test.ts` (~6 eset)
 
 - `/dev/login` hibás key → 401, `dev_login_failure` log
-- `/dev/login` helyes key → 302 redirect, `dev_session` cookie set (httpOnly + secure + lax), `dev_login_success` log
-- `/dev/login` 6. próbálkozás/perc → 429 rate limit
-- `devAuthMiddleware` valid JWT → `req.user = { role: 'admin', ... }`
-- `devAuthMiddleware` expired JWT → 401
-- `devAuthMiddleware` hibás issuer/audience → 401
+- `/dev/login` helyes key → 302 redirect, `app_session_id` cookie set (httpOnly + secure + lax + 12h), `dev_login_success` log
+- `/dev/login` 6. kérés/perc → 429 rate limit
+- Seeded session cookie + new request → `sdk.verifySession` returns valid payload (integration-style teszt, lehet db mock-kal)
+- Első `/dev/login` hívás → `ensureDevUserExists` insert (seed), második hívás → nincs insert (idempotent, cached)
+- Existing user row `role !== "admin"` → `ensureDevUserExists` restore-olja admin-ra + `dev_user_role_restored` warn log
 
-### 8.8 Biztonsági audit összefoglaló
+### 8.7 Biztonsági audit összefoglaló
 
 | Támadásvektor | Védelem |
 |---|---|
 | Public URL exposure | Cloud Run `--no-allow-unauthenticated` |
 | Accidentally production deploy | Triple-gate (route registration + NODE_ENV + ENABLE_DEV_LOGIN) |
 | DEV_LOGIN_KEY brute-force | Rate limit 5/perc, 256-bit entropy, Cloud Run IAM előzetes barrier |
-| DEV_LOGIN_KEY leak | Rotate: új secret version → új Cloud Run revision. Régi JWT-k 12h-n belül expire |
-| Stolen JWT cookie | httpOnly + secure + sameSite=lax, 12h max-age. Rotate JWT_SECRET = invalidate all |
+| DEV_LOGIN_KEY leak | Rotate: új secret version → új Cloud Run revision. Régi session cookie-k 12h-n belül expire |
+| Stolen session cookie | httpOnly + secure + sameSite=lax, 12h max-age. Rotate `JWT_SECRET` (= `ENV.cookieSecret`) = invalidate all session-t (a meglévő is!) |
 | Build-time DCE (esbuild `--define`) | `dev-login-gate.test.ts` bundled build verify |
-| Manus middleware mellett dupla auth | `if (!devAuthEnabled) use manus` — mutually exclusive |
 | Timing attack DEV_LOGIN_KEY-re | `timingSafeEqual` kötelező |
+| Seeded user role escalation | `ensureDevUserExists` minden alkalommal ellenőrzi + restore-olja role-t admin-ra |
 
-**Elfogadott kockázat:** `devAuthMiddleware` nem rate-limited. Érvényes JWT-vel rendelkező támadó (ellopott cookie) korlátlan API hívást tehet 12 órán keresztül. Mitigation: session revocation / token blocklist a **prod-level Auth migration sprint scope-ja**. Staging-en az IAM-gated URL + 12h JWT expire + JWT_SECRET rotation = elfogadható védelem.
+**Elfogadott kockázat:** a session cookie TTL 12 óra, nincs session revocation / token blocklist. Ha egy session cookie kiszivárog, a támadó 12 órán keresztül admin-ként műveleteket tehet. Mitigation: **JWT_SECRET rotation invalidate-olja az összes session-t** (beleértve a legit-et is). Session revocation proper módon a prod-level Auth migration sprint scope-ja. Staging-en az IAM-gated URL + 12h expire + JWT_SECRET rotation = elfogadható védelem.
+
+**Fontos side-effect:** mivel a `JWT_SECRET` (= `ENV.cookieSecret`) **ugyanaz** a Manus OAuth session-ekhez és a dev stub session-höz, a JWT_SECRET rotation a staging dev session-öket ÉS minden valós Manus session-t invalidate-ol. Staging-en ez nem okoz problémát (csak mi vagyunk), prod-on (majd Auth migration után) más secret-ek lesznek.
 
 ---
 
@@ -1040,27 +1075,40 @@ export const logger = {
 
 ### 10.2 Startup log emission — `server/_core/index.ts`
 
-A server `listen` callback-en, a startup validation UTÁN:
+A server jelenleg `server = createServer(app)` + `server.listen(port, callback)` pattern-t használ (NEM `app.listen`). A startup log ehhez igazodik. A DB smoke-query szintén a callback-ben, a `startup_complete` log előtt:
 
 ```typescript
-// server/_core/index.ts — listen callback
-app.listen(port, async () => {
-  // C2b getMasterKey() már a startup-on validál.
-  // Kiegészítés: DB smoke-query
-  try {
-    await db.execute(sql`SELECT 1`);
-  } catch (err) {
-    logger.error({ event: "startup_db_check_failed", error: String(err) });
-    process.exit(1);
-  }
+// server/_core/index.ts (diff) — a létező server.listen callback-en
+import { sql } from "drizzle-orm";
+import { db } from "../db";
+import { logger } from "./logger";
 
-  logger.info({
-    event: "startup_complete",
-    port,
-    nodeEnv: process.env.NODE_ENV,
-    devAuthEnabled,  // a registerDevLoginIfEnabled return value
+async function startServer() {
+  // ... meglévő setup ...
+  const devAuthEnabled = registerDevLoginIfEnabled(app);
+  // ... egyéb setup ...
+
+  server.listen(port, async () => {
+    // DB smoke-query — fast-fail ha a TiDB nem elérhető
+    try {
+      await db.execute(sql`SELECT 1`);
+    } catch (err) {
+      logger.error({ event: "startup_db_check_failed", error: String(err) });
+      process.exit(1);
+    }
+
+    // Startup success marker
+    logger.info({
+      event: "startup_complete",
+      port,
+      nodeEnv: process.env.NODE_ENV,
+      devAuthEnabled,
+    });
+
+    // meglévő log is megmaradhat vagy átkerülhet a logger-re
+    console.log(`Server running on http://localhost:${port}/`);
   });
-});
+}
 ```
 
 **Clarifikáció:** a `startup_complete` event **a mi observability-nkhöz** kell, **NEM a Cloud Run deploy gate-hez**. Cloud Run a container port bindingot + TCP probe-ot figyeli a revision health-hez, függetlenül a log-tól. A `startup_complete` event a cold-start pattern diagnosztikájához (query #5, §10.4) hasznos.
