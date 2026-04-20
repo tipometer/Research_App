@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.github
+docs
+*.md
+.env*
+coverage
+vitest.config.ts
+vitest.integration.config.ts
+server/__tests__
+**/*.test.ts
+**/*.spec.ts
