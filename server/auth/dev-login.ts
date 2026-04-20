@@ -66,6 +66,12 @@ function getLimiter(): RateLimitRequestHandler {
   return _limiter;
 }
 
+/**
+ * Test-only: clears the cached rate limiter so the next `registerDevLoginIfEnabled`
+ * call recreates it with a fresh counter. **Must be followed by
+ * `registerDevLoginIfEnabled(app)` before any request is dispatched** — otherwise
+ * `getLimiter()` will throw with "dev-login limiter not initialized".
+ */
 export function __resetLimiterForTesting(): void {
   _limiter = null;
 }
