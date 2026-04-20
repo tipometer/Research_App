@@ -357,7 +357,7 @@ Tesztek `server.use(mockTrpcMutation(...))` hívással felülírják a default-o
 // client/src/__tests__/test-utils.tsx
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
-import { httpBatchLink } from "@trpc/client";
+import { httpLink } from "@trpc/client";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
 import { render, type RenderOptions } from "@testing-library/react";
@@ -368,29 +368,44 @@ export function renderWithProviders(
   options?: RenderOptions & { initialPath?: string }
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // httpLink (NOT httpBatchLink) — with batching, URLs become
+  // /api/trpc/user.credits,research.list which doesn't match the
+  // single-procedure MSW wildcard */api/trpc/${procedure}. Without
+  // batching, each procedure gets its own URL and matches cleanly.
   const trpcClient = trpc.createClient({
-    links: [httpBatchLink({ url: "/api/trpc" })],
+    links: [httpLink({ url: "/api/trpc" })],
   });
-  // memoryLocation() returns [hookLike, memLoc]. memLoc exposes .history (array
-  // of visited paths) and .navigate(). Tests can inspect memLoc.history.at(-1)
-  // to assert navigation state after user interactions.
-  const [hook, memLoc] = memoryLocation({ path: options?.initialPath ?? "/" });
+  // memoryLocation (wouter 3.x) returns OBJECT (not tuple) with { hook,
+  // navigate, history, reset }. The `record: true` option enables
+  // .history tracking — without it memLoc.history is undefined and
+  // .at(-1) throws. Required for test assertions.
+  const memLoc = memoryLocation({
+    path: options?.initialPath ?? "/",
+    record: true,
+  });
 
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
-          <Router hook={hook}>{children}</Router>
+          <Router hook={memLoc.hook}>{children}</Router>
         </QueryClientProvider>
       </trpc.Provider>
     );
   }
 
   const result = render(ui, { wrapper: Wrapper, ...options });
-  // Expose memLoc so tests can inspect navigation history.
+  // Expose memLoc so tests can inspect memLoc.history.at(-1) or memLoc.navigate().
   return { ...result, memoryLocation: memLoc };
 }
 ```
+
+**API contract (verified against wouter 3.7.1 source):**
+- `memoryLocation({ path, record })` returns `{ hook, navigate, history, reset }` — OBJECT, not tuple
+- Pass `record: true` to populate `history` (array of visited paths)
+- `<Router hook={memLoc.hook}>` — pass the `hook` property to the `Router`
+- Tests: `memLoc.history.at(-1)` = last navigated path; `memLoc.history.length` = total nav count
+- For production runtime: the app still uses wouter's default browser-history hook (no change to production code)
 
 **Navigation assertions in tests** use `memLoc.history.at(-1)`, not `window.location.pathname`:
 ```typescript
@@ -602,7 +617,7 @@ After PR merge → deploy-staging.yml green → new revision Ready:
 | R3 | `user.credits` túl sok refresh | Apró extra DB load | tRPC React Query default caching elég (staleTime ~30s) |
 | R4 | Playwright helyett manual smoke (most) | Manual friction re-deploy-nál | Scope tradeoff; future Prod launch sprint considers Playwright |
 | R5 | Strategy UI→backend enum mapping mismatch Task 0.3 auditon derül ki | Runtime validator error TRPCClientError-ként | Task 0.3 kötelező audit; ha mismatch, a wiring task-ban mapper-t adunk |
-| R6 | `window.location.pathname` vs react-router `useNavigate` mock — MSW-vel nem lehet router-state-et mock-olni | Test assertions nehezebben ellenőrizhetők navigációra | Use `vi.mock("react-router-dom")` pattern ha szükséges — Task 0.4 extra audit ha a test-ek iteráción fennakadnak |
+| R6 | wouter `memoryLocation` API verify — `record: true` option + object return shape critical | If missed, `memLoc.history.at(-1)` throws at test runtime | §6.7 test-utils reference code is verified against wouter 3.7.1; Task 1 acceptance gate runs a trivial navigation smoke test to confirm `memLoc.history` populated correctly |
 
 ### 10.2 Explicit deferred
 
