@@ -1,10 +1,12 @@
 import type { Express, Request, Response } from "express";
 import { timingSafeEqual } from "crypto";
 import { SignJWT } from "jose";
+import type { RateLimitRequestHandler } from "express-rate-limit";
 import rateLimit from "express-rate-limit";
 import { COOKIE_NAME } from "@shared/const";
 import * as db from "../db";
 import { logger } from "../_core/logger";
+import { ENV } from "../_core/env";
 
 // Dev admin identity (fix, not config — staging only)
 const DEV_OPENID = "dev-admin-staging";
@@ -30,26 +32,43 @@ export function registerDevLoginIfEnabled(app: Express): boolean {
   if (!process.env.DEV_LOGIN_KEY) {
     throw new Error("ENABLE_DEV_LOGIN=true but DEV_LOGIN_KEY is missing");
   }
-  if (!process.env.JWT_SECRET) {
+  if (!ENV.cookieSecret) {
     throw new Error("ENABLE_DEV_LOGIN=true but JWT_SECRET is missing");
   }
+
+  // Rate limiter: 5 attempts per IP per minute.
+  // Created at app setup time (required by express-rate-limit), not in the handler.
+  _limiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+      logger.warn({ event: "dev_login_rate_limit", ip: req.ip });
+      res.status(429).json({ error: "Too many attempts" });
+    },
+  });
 
   app.get("/dev/login", devLoginHandler);
   // NO middleware mount — existing sdk.authenticateRequest handles auth
   return true;
 }
 
-// Rate limiter: 5 attempts per IP per minute
-const devLoginLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: (req, res) => {
-    logger.warn({ event: "dev_login_rate_limit", ip: req.ip });
-    res.status(429).json({ error: "Too many attempts" });
-  },
-});
+// Holds the limiter instance created during registerDevLoginIfEnabled.
+// Exported reset allows tests to clear it so each test's beforeEach re-creates it.
+let _limiter: RateLimitRequestHandler | null = null;
+
+function getLimiter(): RateLimitRequestHandler {
+  // _limiter is always set before devLoginHandler is called (set in registerDevLoginIfEnabled).
+  // The null fallback is unreachable in production but satisfies the type checker.
+  /* istanbul ignore next */
+  if (!_limiter) throw new Error("dev-login limiter not initialized");
+  return _limiter;
+}
+
+export function __resetLimiterForTesting(): void {
+  _limiter = null;
+}
 
 async function ensureDevUserExists(): Promise<void> {
   if (seeded) return;
@@ -69,7 +88,8 @@ async function ensureDevUserExists(): Promise<void> {
 
 async function devLoginHandler(req: Request, res: Response): Promise<void> {
   // Apply rate limiter first
-  await new Promise<void>((resolve) => devLoginLimiter(req, res, () => resolve()));
+  const limiter = getLimiter();
+  await new Promise<void>((resolve) => limiter(req, res, () => resolve()));
   if (res.headersSent) return;
 
   await ensureDevUserExists();
@@ -98,7 +118,7 @@ async function devLoginHandler(req: Request, res: Response): Promise<void> {
 
   // SDK-compatible session JWT: same HS256 + JWT_SECRET that sdk.verifySession reads.
   // Payload must have all three {openId, appId, name} non-empty (verifySession check).
-  const secretKey = new TextEncoder().encode(process.env.JWT_SECRET!);
+  const secretKey = new TextEncoder().encode(ENV.cookieSecret);
   const expirationSeconds = Math.floor((Date.now() + SESSION_MAX_AGE_MS) / 1000);
 
   const sessionToken = await new SignJWT({

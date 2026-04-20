@@ -5,6 +5,7 @@ import * as db from "../db";
 import {
   registerDevLoginIfEnabled,
   __resetSeedCacheForTesting,
+  __resetLimiterForTesting,
 } from "../auth/dev-login";
 
 // Mock db.upsertUser — we don't need a real DB for handler tests
@@ -17,6 +18,7 @@ describe("/dev/login handler", () => {
 
   beforeEach(() => {
     __resetSeedCacheForTesting();
+    __resetLimiterForTesting();
     vi.clearAllMocks();
     vi.stubEnv("NODE_ENV", "staging");
     vi.stubEnv("ENABLE_DEV_LOGIN", "true");
