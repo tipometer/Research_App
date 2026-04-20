@@ -99,7 +99,7 @@ Non-negotiable rules. If a task step appears to conflict, these win:
 | **Create** `server/_core/logger.ts` | Structured JSON logger shim for Cloud Logging (severity + jsonPayload) | Task 3 |
 | **Create** `server/_core/logger.test.ts` | Unit tests: severity mapping, JSON shape, timestamp format | Task 3 |
 | **Create** `server/auth/dev-login.ts` | Triple-gated `/dev/login` handler, timing-safe key compare, `ensureDevUserExists` seed | Task 4 |
-| **Create** `server/__tests__/dev-login-gate.test.ts` | 3 tests: triple-gate each negative branch | Task 4 |
+| **Create** `server/__tests__/dev-login-gate.test.ts` | 5 tests: positive + 2 triple-gate negative branches + 2 fast-fail env checks | Task 4 |
 | **Create** `server/__tests__/dev-login-handler.test.ts` | ~6 tests: key validation, cookie set, rate limit, seed idempotency, role restore | Task 4 |
 | **Create** `Dockerfile` | Multi-stage: Node 22 Alpine build → runtime (or slim fallback) | Task 8 |
 | **Create** `.dockerignore` | node_modules, dist, .git, tests, docs, env files | Task 8 |
@@ -982,6 +982,8 @@ git commit -m "feat: triple-gated dev auth stub with SDK-compatible session cook
 
 - [ ] **Step 10: User checkpoint** — "Task 4 done. dev-login module + 11 new tests (5 gate + 6 handler) passing. Total 220. Ready for Task 5 (cloud bootstrap)."
 
+**Note on Task 4 mock scope:** `vi.mock("../db", () => ({ upsertUser: ... }))` only mocks `upsertUser` because that's the only named member dev-login.ts imports from `../db`. If a future change adds another `db.*` call in dev-login.ts, extend the mock accordingly.
+
 ---
 
 ## Task 5: GCP project + WIF + SA bootstrap (one-time manual, user runs on their laptop)
@@ -1692,7 +1694,7 @@ permissions:
   id-token: write
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}  # or hardcode if GCP_PROJECT_ID not set
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}  # set in Task 5 Step 10
   REGION: europe-west3
   SERVICE: research-app-staging
   AR_REPO: research-app-staging
@@ -1963,6 +1965,8 @@ Expected:
 - [ ] `prefix` = `ENC1:`
 - [ ] `len` between 80 and 130
 - [ ] NOT `sk-...` (if `sk-` → STOP, encryption path broken, BLOCKER)
+
+**TLS fallback:** if `mysql --ssl-mode=VERIFY_IDENTITY` fails with a CA cert validation error (unusual, but possible in some CLI setups), retry with `--ssl-mode=REQUIRED` — this still enforces TLS but skips the hostname-cert-identity check. TiDB Serverless certificates are issued by a standard public CA, so `VERIFY_IDENTITY` should succeed on macOS / Linux with an up-to-date system trust store.
 
 - [ ] **Step 7: Research pipeline trigger (spec §11.2 Step 7)**
 
