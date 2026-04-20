@@ -1,5 +1,6 @@
 import { eq, desc, and } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle, MySql2Database } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
 import {
   users, InsertUser,
   researches, InsertResearch,
@@ -13,12 +14,21 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
-let _db: ReturnType<typeof drizzle> | null = null;
+let _db: MySql2Database | null = null;
 
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      // TLS mandatory for non-local hosts (TiDB Serverless requires TLS).
+      // Local MySQL (not currently used) can go plain.
+      const isLocal = /@(localhost|127\.0\.0\.1)(:|\/|$)/.test(process.env.DATABASE_URL);
+      const pool = mysql.createPool({
+        uri: process.env.DATABASE_URL,
+        ssl: isLocal ? undefined : { minVersion: "TLSv1.2", rejectUnauthorized: true },
+        connectionLimit: 10,
+        waitForConnections: true,
+      });
+      _db = drizzle(pool);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
