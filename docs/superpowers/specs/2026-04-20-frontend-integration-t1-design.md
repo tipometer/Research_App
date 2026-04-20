@@ -502,9 +502,13 @@ import Dashboard from "./Dashboard";
 
 describe("Dashboard", () => {
   it("shows loading skeleton while queries pending", async () => {
-    // Without MSW handler, the query stays in loading state
+    // Without MSW handler matching these queries, they stay in loading state.
+    // queryByTestId() returns null on miss (no throw); combined with getByRole
+    // as fallback if the implementation prefers role="status" over data-testid.
     renderWithProviders(<Dashboard />);
-    expect(screen.getByTestId("dashboard-loading") || screen.getByRole("status")).toBeInTheDocument();
+    const loadingMarker =
+      screen.queryByTestId("dashboard-loading") ?? screen.getByRole("status");
+    expect(loadingMarker).toBeInTheDocument();
   });
 
   it("shows empty state when no researches", async () => {
