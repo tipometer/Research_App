@@ -477,33 +477,52 @@ Nincs `gcloud` egyenérték — TiDB külső SaaS. Lépések:
    ```
    (A `?ssl=...` URL-paramot NEM használjuk — TLS config kódban, §6.2)
 
-### 6.2 mysql2 TLS config (`server/db.ts`)
+### 6.2 mysql2 TLS config (`server/db.ts` minimal diff)
 
-A `DATABASE_URL` egyetlen Secret Manager entry-ben marad (nem komponensekre bontva — a Drizzle migrate is ezt várja). A TLS config kódban aktiválódik, nem URL-paramban:
+A `DATABASE_URL` egyetlen Secret Manager entry-ben marad (nem komponensekre bontva — a Drizzle migrate is ezt várja). A TLS config kódban aktiválódik, nem URL-paramban.
+
+A meglévő `server/db.ts` a `getDb()`-n belül a drizzle shorthand-et használja: `_db = drizzle(process.env.DATABASE_URL)`. Ez a shorthand nem teszi lehetővé explicit TLS config-ot. Át kell alakítani explicit pool-ra:
 
 ```typescript
-// server/db.ts (implementáció Task 3 során)
+// server/db.ts — diff a jelenlegi getDb() függvényhez
 import mysql from "mysql2/promise";
+import { drizzle } from "drizzle-orm/mysql2";
 
-const url = process.env.DATABASE_URL;
-if (!url) throw new Error("DATABASE_URL missing");
+let _db: ReturnType<typeof drizzle> | null = null;
 
-// TLS kötelező minden nem-localhost hoszton. TiDB / managed DB-k mind
-// TLS-t követelnek; csak a (nem létező) lokál MySQL lehet plain.
-const isLocal = /@(localhost|127\.0\.0\.1)(:|\/|$)/.test(url);
-const ssl = isLocal
-  ? undefined
-  : { minVersion: "TLSv1.2" as const, rejectUnauthorized: true };
-
-export const pool = mysql.createPool({
-  uri: url,
-  ssl,
-  connectionLimit: 10,
-  waitForConnections: true,
-});
+export async function getDb() {
+  if (!_db && process.env.DATABASE_URL) {
+    try {
+      // TLS kötelező minden nem-localhost hoszton. TiDB / managed DB-k mind
+      // TLS-t követelnek; csak a (nem létező) lokál MySQL lehet plain.
+      const isLocal = /@(localhost|127\.0\.0\.1)(:|\/|$)/.test(process.env.DATABASE_URL);
+      const pool = mysql.createPool({
+        uri: process.env.DATABASE_URL,
+        ssl: isLocal ? undefined : { minVersion: "TLSv1.2", rejectUnauthorized: true },
+        connectionLimit: 10,
+        waitForConnections: true,
+      });
+      _db = drizzle(pool);
+    } catch (error) {
+      console.warn("[Database] Failed to connect:", error);
+      _db = null;
+    }
+  }
+  return _db;
+}
 ```
 
-**Drizzle-kit migration TLS:** a `drizzle-kit migrate` laptop-ról futtatáskor a `drizzle.config.ts` nem feltétlenül veszi át a TLS-t a URL-ből. Ha a `pnpm db:push`/`db:migrate` TLS-hibát dob, a `drizzle.config.ts`-ben explicit `dbCredentials: { url, ssl: { minVersion: "TLSv1.2" } }`-t kell használni — Task 3 implementation-közben verify.
+**Változás hatóköre:** csak a `getDb()` belseje módosul, minden `upsertUser`, `getUserByOpenId` stb. helper változatlan (a `drizzle(...)` visszatérési típusa ugyanaz akár shorthand, akár pool alapon készült).
+
+**Drizzle-kit migration TLS:** a `drizzle-kit migrate` laptop-ról futtatáskor a `drizzle.config.ts` nem veszi át ezt a mysql2 pool config-ot (külön processzusban fut). Ha a `pnpm db:push`/`db:migrate` TLS-hibát dob, a `drizzle.config.ts`-t is bővíteni kell:
+```typescript
+// drizzle.config.ts (opcionális bővítés, ha TLS hiba lép fel)
+dbCredentials: {
+  url: connectionString,
+  ssl: { minVersion: "TLSv1.2", rejectUnauthorized: true },
+},
+```
+**Task 3 implementation-közben verify.**
 
 ### 6.3 Migration strategy — kézi laptop-ról
 
@@ -669,10 +688,8 @@ import type { Express, Request, Response } from "express";
 import { timingSafeEqual } from "crypto";
 import { SignJWT } from "jose";
 import rateLimit from "express-rate-limit";
-import { eq } from "drizzle-orm";
 import { COOKIE_NAME } from "@shared/const";
-import { db } from "../db";              // drizzle client
-import { users } from "../../drizzle/schema";
+import * as db from "../db";  // a meglévő codebase pattern-je (lásd server/_core/oauth.ts)
 import { logger } from "../_core/logger";
 
 // Fix identitás a dev admin-nak. A sdk.verifySession megköveteli
@@ -711,40 +728,28 @@ export function registerDevLoginIfEnabled(app: Express): boolean {
 }
 
 /**
- * Idempotent dev user seed. Drizzle insert-et használ közvetlenül (nem db.upsertUser-t),
- * mert a role="admin" explicit kell, amit az upsertUser signature nem exponál.
- * Ha a user már létezik, ellenőrzi a role-t, és szükség esetén update-eli admin-ra.
+ * Idempotent dev user seed. A meglévő db.upsertUser helper-t használja, ami
+ * ON DUPLICATE KEY UPDATE-tel insert-OR-update-el az openId unique index-en.
+ * Az upsertUser signature támogatja a role field explicit beállítását
+ * (db.ts:53-54), ezért egyetlen hívással mind a seed, mind a role-restoration
+ * megoldott: ha a row létezik "user" role-lal, a role "admin"-ra update-elődik.
  */
 async function ensureDevUserExists(): Promise<void> {
   if (seeded) return;
-  const existing = await db
-    .select()
-    .from(users)
-    .where(eq(users.openId, DEV_OPENID));
-
-  if (existing.length === 0) {
-    await db.insert(users).values({
-      openId: DEV_OPENID,
-      name: DEV_NAME,
-      email: DEV_EMAIL,
-      loginMethod: DEV_LOGIN_METHOD,
-      role: "admin",
-      // credits, language, createdAt, updatedAt, lastSignedIn: default értékkel
-    });
-    logger.info({ event: "dev_user_seeded", openId: DEV_OPENID });
-  } else if (existing[0].role !== "admin") {
-    // Elvileg nem fordulhat elő (a seed admin-nal írja), de ha külső behatás
-    // módosította, a dev stub-nak mindig admin-nak kell lennie.
-    await db
-      .update(users)
-      .set({ role: "admin" })
-      .where(eq(users.openId, DEV_OPENID));
-    logger.warn({ event: "dev_user_role_restored", openId: DEV_OPENID });
-  }
-
+  await db.upsertUser({
+    openId: DEV_OPENID,
+    name: DEV_NAME,
+    email: DEV_EMAIL,
+    loginMethod: DEV_LOGIN_METHOD,
+    role: "admin",
+    lastSignedIn: new Date(),
+  });
   seeded = true;
+  logger.info({ event: "dev_user_ensured", openId: DEV_OPENID });
 }
 ```
+
+**Megjegyzés:** a `db.upsertUser` a `getDb()`-t használja belül, és ha a DB nem elérhető (cold start, hiányzó `DATABASE_URL`), csendesen return-ol `console.warn`-nel. A mi esetünkben viszont a DB elérhetőség már a §10.2 `startup_complete` előtt validálódik (startup smoke-query retry-val), tehát a `/dev/login` hívás idejére garantáltan elérhető. Ha valami mégis failel, a `logger.info({ event: "dev_user_ensured" })` nem jelenik meg, és a következő `sdk.authenticateRequest` hívás `ForbiddenError`-ral fail-el (mert a user row nincs DB-ben) — ez a behavior kívánt fail-loud staging-en.
 
 ### 8.3 `/dev/login` handler — timing-safe compare + rate limit + SDK-kompatibilis session cookie
 
@@ -1080,7 +1085,7 @@ A server jelenleg `server = createServer(app)` + `server.listen(port, callback)`
 ```typescript
 // server/_core/index.ts (diff) — a létező server.listen callback-en
 import { sql } from "drizzle-orm";
-import { db } from "../db";
+import { getDb } from "../db";   // a meglévő named export (db.ts:18)
 import { logger } from "./logger";
 
 async function startServer() {
@@ -1089,11 +1094,33 @@ async function startServer() {
   // ... egyéb setup ...
 
   server.listen(port, async () => {
-    // DB smoke-query — fast-fail ha a TiDB nem elérhető
-    try {
-      await db.execute(sql`SELECT 1`);
-    } catch (err) {
-      logger.error({ event: "startup_db_check_failed", error: String(err) });
+    // DB smoke-query retry-with-backoff a TiDB Serverless auto-pause wake
+    // miatt (első query ~200 ms cold start). 3 próbálkozás, 2 sec spacing.
+    const drz = await getDb();
+    if (!drz) {
+      logger.error({
+        event: "startup_db_check_failed",
+        reason: "getDb() returned null (DATABASE_URL unset or connection failed)",
+      });
+      process.exit(1);
+    }
+
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await drz.execute(sql`SELECT 1`);
+        lastErr = undefined;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 3) {
+          logger.warn({ event: "startup_db_check_retry", attempt, error: String(err) });
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
+    }
+    if (lastErr) {
+      logger.error({ event: "startup_db_check_failed", error: String(lastErr) });
       process.exit(1);
     }
 
@@ -1105,7 +1132,7 @@ async function startServer() {
       devAuthEnabled,
     });
 
-    // meglévő log is megmaradhat vagy átkerülhet a logger-re
+    // meglévő plain log is megmaradhat, párhuzamosan működik a Cloud Logging-gel
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
