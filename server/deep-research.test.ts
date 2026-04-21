@@ -73,6 +73,20 @@ vi.mock("./ai/pipeline-phases", () => ({
         },
         reportMarkdown: "## Mock Report\n\n".padEnd(4500, "x"),
         verdictReason: "Mock verdict reason for a strong GO signal.".padEnd(60, "."),
+        // Validation Workspace additive fields (sprint V2)
+        positiveDrivers: ["Driver A grounded.", "Driver B grounded."],
+        negativeDrivers: ["Concern A grounded.", "Concern B grounded."],
+        missingEvidence: ["Unknown X — survey needed."],
+        nextActions: [
+          "Run a 5-question pricing survey.",
+          "Interview 3 target users.",
+          "Prototype MVP in 2 weeks.",
+        ],
+        synthesisClaims: [
+          { claim: "Market grows 20% YoY.", dimensions: ["market_size"], stance: "supports", confidence: 0.85 },
+          { claim: "Incumbents are few.", dimensions: ["competition"], stance: "weakens", confidence: 0.7 },
+          { claim: "Stack is mature.", dimensions: ["feasibility"], stance: "supports", confidence: 0.9 },
+        ],
       };
       onPartial({ verdict: "GO" });
       onPartial(final);
