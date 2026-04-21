@@ -33,6 +33,7 @@ import { generateText } from "ai";
 import { nanoid } from "nanoid";
 import { encrypt, getMasterKey, DecryptionError } from "./ai/crypto";
 import { decryptIfNeeded } from "./ai/router";
+import { validationRouter } from "./validation.router";
 
 // In-memory rate limit for admin.ai.testProvider — 10s cooldown per (userId, provider)
 const testProviderCooldown = new Map<string, number>();
@@ -419,6 +420,9 @@ export const appRouter = router({
         }),
     }),
   }),
+
+  // ─── Validation Workspace (sprint V2, additive) ───────────────────────────
+  validation: validationRouter,
 });
 
 export type AppRouter = typeof appRouter;

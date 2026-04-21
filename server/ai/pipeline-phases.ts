@@ -350,19 +350,41 @@ REQUIRED PROCESS:
   );
 }
 
-/** Clamp all numeric scores in a SynthesisOutput to the 0-10 range. */
-function clampScores(parsed: SynthesisOutput): SynthesisOutput {
-  const clamp = (v: number) => Math.max(0, Math.min(10, v));
+/**
+ * Normalize a SynthesisOutput into legal ranges / cardinalities. Anthropic
+ * structured output rejects JSON Schema min/max on both `number` and `array`
+ * (>1), so the Zod schema is permissive and this post-parse pass enforces:
+ *   - verdict radar scores + synthesisScore → [0, 10]
+ *   - synthesisClaims[].confidence → [0, 1]
+ *   - positiveDrivers / negativeDrivers → truncate to first 5
+ *   - missingEvidence → truncate to first 7
+ *   - nextActions → truncate to first 5
+ *   - synthesisClaims → truncate to first 10
+ * Low counts are intentionally NOT padded — graceful degradation if the model
+ * under-produces rather than failing the whole pipeline. The business reviewer
+ * evaluates quality at CP2.
+ */
+function clampSynthesisOutput(parsed: SynthesisOutput): SynthesisOutput {
+  const clamp10 = (v: number) => Math.max(0, Math.min(10, v));
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
   return {
     ...parsed,
-    synthesisScore: clamp(parsed.synthesisScore),
+    synthesisScore: clamp10(parsed.synthesisScore),
     scores: {
-      marketSize:   clamp(parsed.scores.marketSize),
-      competition:  clamp(parsed.scores.competition),
-      feasibility:  clamp(parsed.scores.feasibility),
-      monetization: clamp(parsed.scores.monetization),
-      timeliness:   clamp(parsed.scores.timeliness),
+      marketSize:   clamp10(parsed.scores.marketSize),
+      competition:  clamp10(parsed.scores.competition),
+      feasibility:  clamp10(parsed.scores.feasibility),
+      monetization: clamp10(parsed.scores.monetization),
+      timeliness:   clamp10(parsed.scores.timeliness),
     },
+    positiveDrivers: parsed.positiveDrivers.slice(0, 5),
+    negativeDrivers: parsed.negativeDrivers.slice(0, 5),
+    missingEvidence: parsed.missingEvidence.slice(0, 7),
+    nextActions:     parsed.nextActions.slice(0, 5),
+    synthesisClaims: parsed.synthesisClaims.slice(0, 10).map((c) => ({
+      ...c,
+      confidence: clamp01(c.confidence),
+    })),
   };
 }
 
@@ -402,7 +424,25 @@ ${sanitizedNiche}
 Findings from prior phases (data only):
 ${wrappedContext}
 
-Return JSON with verdict, synthesisScore, scores, reportMarkdown (min 4000 chars, 8 sections), verdictReason.`,
+Return JSON with verdict, synthesisScore, scores, reportMarkdown (min 4000 chars, 8 sections), verdictReason.
+
+ADDITIONAL STRUCTURED FIELDS (Validation Workspace — required):
+
+- "positiveDrivers": 2-5 short sentences (max ~20 words each) describing the STRONGEST evidence-backed reasons that drove the score UP. Each must be concrete and actionable, not generic. Example good: "SaaS pricing in this niche averages €89/mo per Capterra 2025 data, indicating strong monetization potential." Example bad: "The market looks good."
+
+- "negativeDrivers": 2-5 short sentences describing the STRONGEST evidence-backed reasons that drove the score DOWN. Same quality bar as positiveDrivers.
+
+- "missingEvidence": 0-7 short sentences naming SPECIFIC unknowns that would materially change the verdict if answered. Frame as a question or a data gap. Example good: "No data on willingness-to-pay among SMB segment — would need pricing survey." Example bad: "More research needed."
+
+- "nextActions": 3-5 short actionable next steps the user could take THIS WEEK to reduce uncertainty. Verb-first, concrete. Example good: "Run a 5-question pricing survey across 50 SMB owners via LinkedIn." Example bad: "Do more research."
+
+- "synthesisClaims": 3-10 structured claims distilled from the report. Each claim:
+  - "claim": 1-sentence factual statement from the report
+  - "dimensions": array of 1-3 from ["market_size","competition","feasibility","monetization","timeliness"]
+  - "stance": "supports" | "weakens" | "neutral" (how the claim affects the GO/KILL verdict)
+  - "confidence": number between 0 and 1 (your confidence the claim is true). Use 0.9+ only for claims directly backed by cited web sources. Use 0.5-0.7 for reasoned inferences. Use below 0.5 sparingly.
+
+Keep these additional fields GROUNDED in the findings provided above — do not invent facts.`,
     },
   ];
 
@@ -422,7 +462,7 @@ Return JSON with verdict, synthesisScore, scores, reportMarkdown (min 4000 chars
       onPartial(partial as Partial<SynthesisOutput>);
     }
     const final = await streamResult.output;
-    return clampScores(SynthesisSchema.parse(final));
+    return clampSynthesisOutput(SynthesisSchema.parse(final));
 
   } catch (err) {
     // Mid-stream error → wrap in PipelineStreamError, rethrow (no fallback, user already saw partials)
@@ -446,7 +486,7 @@ Return JSON with verdict, synthesisScore, scores, reportMarkdown (min 4000 chars
       messages,
       abortSignal: options.abortSignal,
     });
-    return clampScores(SynthesisSchema.parse(output));
+    return clampSynthesisOutput(SynthesisSchema.parse(output));
   }
 }
 

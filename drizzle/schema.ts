@@ -8,6 +8,8 @@ import {
   boolean,
   decimal,
   json,
+  date,
+  index,
 } from "drizzle-orm/mysql-core";
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -171,3 +173,59 @@ export const brainstormSessions = mysqlTable("brainstorm_sessions", {
 });
 
 export type BrainstormSession = typeof brainstormSessions.$inferSelect;
+
+// ─── Evidence ─────────────────────────────────────────────────────────────────
+export const evidence = mysqlTable(
+  "evidence",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    researchId: int("researchId").notNull(),
+    type: varchar("type", { length: 32 }).notNull(), // 'web_source' | 'synthesis_claim' (future: 'survey_result' | 'manual_claim' | 'csv_import')
+    claim: text("claim").notNull(),
+    sourceUrl: text("sourceUrl"),
+    sourceTitle: varchar("sourceTitle", { length: 512 }),
+    sourceDate: date("sourceDate"),
+    sourceQuality: varchar("sourceQuality", { length: 16 }), // 'low' | 'medium' | 'high' | null
+    confidence: decimal("confidence", { precision: 3, scale: 2 }), // 0.00 - 1.00
+    dimensions: json("dimensions").notNull(), // Array<'market_size'|'competition'|'feasibility'|'monetization'|'timeliness'>
+    stance: varchar("stance", { length: 16 }).notNull(), // 'supports' | 'weakens' | 'neutral'
+    rawPayload: json("rawPayload"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    researchIdIdx: index("idx_evidence_research_id").on(t.researchId),
+  }),
+);
+
+export type Evidence = typeof evidence.$inferSelect;
+export type InsertEvidence = typeof evidence.$inferInsert;
+
+// ─── Decision Snapshots ───────────────────────────────────────────────────────
+export const decisionSnapshots = mysqlTable(
+  "decision_snapshots",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    researchId: int("researchId").notNull(),
+    scores: json("scores").notNull(), // { market_size, competition, feasibility, monetization, timeliness }
+    verdict: mysqlEnum("verdict", ["GO", "KILL", "CONDITIONAL"]).notNull(),
+    rationale: json("rationale").notNull(), // string[]
+    positiveDrivers: json("positiveDrivers"), // string[]
+    negativeDrivers: json("negativeDrivers"), // string[]
+    missingEvidence: json("missingEvidence"), // string[]
+    nextActions: json("nextActions"), // string[]
+    evidenceVersion: int("evidenceVersion").default(1).notNull(),
+    evidenceCount: int("evidenceCount").default(0).notNull(),
+    sourceSynthesisId: int("sourceSynthesisId"), // nullable reference to research_phases.id
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    researchIdIdx: index("idx_decision_snapshots_research_id").on(t.researchId),
+    researchVersionIdx: index("idx_decision_snapshots_research_version").on(
+      t.researchId,
+      t.evidenceVersion,
+    ),
+  }),
+);
+
+export type DecisionSnapshot = typeof decisionSnapshots.$inferSelect;
+export type InsertDecisionSnapshot = typeof decisionSnapshots.$inferInsert;

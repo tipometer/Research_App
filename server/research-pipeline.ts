@@ -13,6 +13,8 @@ import {
   getDb,
 } from "./db";
 import { sources as sourcesTable, researchPhases } from "../drizzle/schema";
+import { persistEvidenceAndSnapshot } from "./synthesis-to-evidence-mapper";
+import { logger } from "./_core/logger";
 
 type SseEvent =
   | { type: "phase_start"; phase: string; label: string }
@@ -221,6 +223,67 @@ export async function runResearchPipeline(req: Request, res: Response) {
         }),
       );
       await Promise.all(insertPromises);
+    }
+
+    // Step A2: Validation Workspace mapper (sprint V2, additive).
+    // Persist evidence + decision_snapshot rows derived from the synthesis
+    // output. Failure here MUST NOT block research completion — the classic
+    // report remains the source of truth for the legacy UI, the new tables
+    // feed the future Validation Workspace UX. See scope §5.5 and
+    // synthesis-to-evidence-mapper.ts design notes.
+    if (db) {
+      const mapperStart = Date.now();
+      try {
+        const mapperResult = await persistEvidenceAndSnapshot(db, {
+          researchId,
+          synthesis: synth,
+          sources: allSources,
+          // sourceSynthesisId left null — capturing the synthesis research_phases
+          // row's auto-inc id would require changing the existing insert on L203,
+          // which is out of scope (§2.2 forbids incidental refactors). Can be
+          // added later via a targeted SELECT if audit traceability demands it.
+          sourceSynthesisId: null,
+        });
+        logger.info({
+          event: "mapper.success",
+          researchId,
+          evidenceCount: mapperResult.evidenceInserted,
+          webSourceEvidenceCount: mapperResult.webSourceEvidenceCount,
+          synthesisClaimEvidenceCount: mapperResult.synthesisClaimEvidenceCount,
+          snapshotId: mapperResult.snapshotId,
+          mapperDuration_ms: Date.now() - mapperStart,
+        });
+        // Audit log — new state-changing op per scope §10. Non-blocking:
+        // a failure here must not cascade to research completion either.
+        try {
+          await logAudit(
+            userId,
+            "decision_snapshot.created",
+            {
+              researchId,
+              snapshotId: mapperResult.snapshotId,
+              evidenceCount: mapperResult.evidenceInserted,
+              verdict: synth.verdict,
+            },
+            req,
+          );
+        } catch (auditErr) {
+          logger.warn({
+            event: "audit.mapper_success.failed",
+            researchId,
+            error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          });
+        }
+      } catch (err) {
+        // Graceful degradation — log only, classic report continues to ship.
+        logger.error({
+          event: "mapper.failed",
+          researchId,
+          mapperDuration_ms: Date.now() - mapperStart,
+          error: err instanceof Error ? err.message : String(err),
+          errorName: err instanceof Error ? err.name : undefined,
+        });
+      }
     }
 
     // Step B: commit status to DB BEFORE emitting pipeline_complete

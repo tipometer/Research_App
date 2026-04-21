@@ -50,6 +50,25 @@ function mockResolveWithFallback(
   });
 }
 
+// Shared Validation-Workspace fields (sprint V2) — required by the bigger
+// SynthesisSchema. Spread into finalObj fixtures so every synthesis mock stays
+// valid without repeating the block.
+const VALIDATION_WORKSPACE_FIELDS = {
+  positiveDrivers: ["Driver A grounded in source.", "Driver B grounded in source."],
+  negativeDrivers: ["Concern A grounded.", "Concern B grounded."],
+  missingEvidence: ["Unknown X — needs survey."],
+  nextActions: [
+    "Run a 5-question pricing survey.",
+    "Interview 3 target users.",
+    "Prototype MVP in 2 weeks.",
+  ],
+  synthesisClaims: [
+    { claim: "Market grows 20% YoY.", dimensions: ["market_size"] as const, stance: "supports" as const, confidence: 0.85 },
+    { claim: "Incumbents are few but strong.", dimensions: ["competition"] as const, stance: "weakens" as const, confidence: 0.7 },
+    { claim: "Stack is mature.", dimensions: ["feasibility"] as const, stance: "supports" as const, confidence: 0.9 },
+  ],
+};
+
 // ---------------------------------------------------------------------------
 // Phase 1
 // ---------------------------------------------------------------------------
@@ -180,6 +199,7 @@ describe("runPhase4Stream (Synthesis)", () => {
       scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
       reportMarkdown: "x".repeat(4500),
       verdictReason: "reasonable".repeat(10),
+      ...VALIDATION_WORKSPACE_FIELDS,
     };
     async function* mockPartials() {
       yield { verdict: "GO" };
@@ -197,6 +217,98 @@ describe("runPhase4Stream (Synthesis)", () => {
     expect(collected).toHaveLength(3);
     expect(final.verdict).toBe("GO");
     expect(final.reportMarkdown.length).toBeGreaterThan(4000);
+  });
+
+  it("truncates oversized driver/action/claim arrays to documented maxima", async () => {
+    const finalObj = {
+      verdict: "GO" as const,
+      synthesisScore: 7,
+      scores: { marketSize: 7, competition: 5, feasibility: 6, monetization: 7, timeliness: 8 },
+      reportMarkdown: "x".repeat(4500),
+      verdictReason: "reasonable".repeat(10),
+      positiveDrivers: ["p1", "p2", "p3", "p4", "p5", "p6", "p7"], // 7 → trim to 5
+      negativeDrivers: ["n1", "n2", "n3", "n4", "n5", "n6"],        // 6 → trim to 5
+      missingEvidence: ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9"], // 9 → trim to 7
+      nextActions: ["a1", "a2", "a3", "a4", "a5", "a6"],             // 6 → trim to 5
+      synthesisClaims: Array.from({ length: 12 }, (_, i) => ({       // 12 → trim to 10
+        claim: `c${i}`,
+        dimensions: ["market_size"] as const,
+        stance: "supports" as const,
+        confidence: 0.5,
+      })),
+    };
+    async function* mockPartials() { yield finalObj; }
+    (streamText as any).mockReturnValue({
+      partialOutputStream: mockPartials(),
+      output: Promise.resolve(finalObj),
+    });
+    mockResolveNoFallback("claude-sonnet-4-6", "anthropic");
+
+    const result = await runPhase4Stream({ nicheName: "X", context: "ctx" }, () => {});
+    expect(result.positiveDrivers).toHaveLength(5);
+    expect(result.negativeDrivers).toHaveLength(5);
+    expect(result.missingEvidence).toHaveLength(7);
+    expect(result.nextActions).toHaveLength(5);
+    expect(result.synthesisClaims).toHaveLength(10);
+  });
+
+  it("does NOT pad under-produced arrays — graceful degradation", async () => {
+    const finalObj = {
+      verdict: "CONDITIONAL" as const,
+      synthesisScore: 5,
+      scores: { marketSize: 5, competition: 5, feasibility: 5, monetization: 5, timeliness: 5 },
+      reportMarkdown: "x".repeat(4500),
+      verdictReason: "reasonable".repeat(10),
+      positiveDrivers: ["only one driver"], // 1 — passes through
+      negativeDrivers: [],                   // empty — passes through
+      missingEvidence: [],
+      nextActions: ["a1"],                   // 1 — passes through
+      synthesisClaims: [
+        { claim: "c1", dimensions: ["market_size"] as const, stance: "neutral" as const, confidence: 0.5 },
+      ],
+    };
+    async function* mockPartials() { yield finalObj; }
+    (streamText as any).mockReturnValue({
+      partialOutputStream: mockPartials(),
+      output: Promise.resolve(finalObj),
+    });
+    mockResolveNoFallback("claude-sonnet-4-6", "anthropic");
+
+    const result = await runPhase4Stream({ nicheName: "X", context: "ctx" }, () => {});
+    expect(result.positiveDrivers).toEqual(["only one driver"]);
+    expect(result.negativeDrivers).toEqual([]);
+    expect(result.nextActions).toHaveLength(1);
+    expect(result.synthesisClaims).toHaveLength(1);
+  });
+
+  it("clamps out-of-range scores to [0,10] and claim confidence to [0,1]", async () => {
+    const finalObj = {
+      verdict: "GO" as const,
+      synthesisScore: 12.4, // over
+      scores: { marketSize: 15, competition: -2, feasibility: 7, monetization: 7, timeliness: 8 },
+      reportMarkdown: "x".repeat(4500),
+      verdictReason: "reasonable".repeat(10),
+      ...VALIDATION_WORKSPACE_FIELDS,
+      synthesisClaims: [
+        { claim: "overshoot", dimensions: ["market_size"] as const, stance: "supports" as const, confidence: 1.5 },
+        { claim: "undershoot", dimensions: ["competition"] as const, stance: "weakens" as const, confidence: -0.3 },
+        { claim: "inside", dimensions: ["feasibility"] as const, stance: "neutral" as const, confidence: 0.4 },
+      ],
+    };
+    async function* mockPartials() { yield finalObj; }
+    (streamText as any).mockReturnValue({
+      partialOutputStream: mockPartials(),
+      output: Promise.resolve(finalObj),
+    });
+    mockResolveNoFallback("claude-sonnet-4-6", "anthropic");
+
+    const result = await runPhase4Stream({ nicheName: "X", context: "ctx" }, () => {});
+    expect(result.synthesisScore).toBe(10);
+    expect(result.scores.marketSize).toBe(10);
+    expect(result.scores.competition).toBe(0);
+    expect(result.synthesisClaims[0].confidence).toBe(1);
+    expect(result.synthesisClaims[1].confidence).toBe(0);
+    expect(result.synthesisClaims[2].confidence).toBe(0.4); // in-range unchanged
   });
 
   it("throws when final output is invalid", async () => {
@@ -334,6 +446,7 @@ describe("runPhase4Stream fallback semantics", () => {
       scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
       reportMarkdown: "x".repeat(4500),
       verdictReason: "reasoned".repeat(20),
+      ...VALIDATION_WORKSPACE_FIELDS,
     };
     (generateText as any).mockResolvedValueOnce({ output: finalObj });
     const onFallback = vi.fn();
@@ -356,6 +469,7 @@ describe("runPhase4Stream fallback semantics", () => {
       scores: { marketSize: 8, competition: 6, feasibility: 7, monetization: 7, timeliness: 8 },
       reportMarkdown: "x".repeat(4500),
       verdictReason: "reasoned".repeat(20),
+      ...VALIDATION_WORKSPACE_FIELDS,
     };
     async function* oneThenThrow() {
       yield { verdict: "GO" };
