@@ -1,4 +1,4 @@
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { drizzle, MySql2Database } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import {
@@ -97,14 +97,26 @@ export async function getUserCredits(userId: number): Promise<number> {
 export async function deductCredit(userId: number, amount: number, description: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.update(users).set({ credits: (users.credits as any) - amount }).where(eq(users.id, userId));
+  // NOTE: Use drizzle's `sql` template to generate a SQL expression
+  // (`credits - ?`) instead of a JS `-` operator. The previous form
+  // (`(users.credits as any) - amount`) coerced the Drizzle column reference
+  // to the string "[object Object]", producing bogus UPDATE parameters like
+  // `"[object Object]5"` and 500 errors on every invocation.
+  await db
+    .update(users)
+    .set({ credits: sql`${users.credits} - ${amount}` })
+    .where(eq(users.id, userId));
   await db.insert(creditTransactions).values({ userId, amount: -amount, type: "usage", description });
 }
 
 export async function addCredit(userId: number, amount: number, description: string): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.update(users).set({ credits: (users.credits as any) + amount }).where(eq(users.id, userId));
+  // See deductCredit above for the rationale — this was the mirror bug.
+  await db
+    .update(users)
+    .set({ credits: sql`${users.credits} + ${amount}` })
+    .where(eq(users.id, userId));
   await db.insert(creditTransactions).values({ userId, amount, type: "purchase", description });
 }
 
