@@ -116,6 +116,7 @@ export const hu = {
           monetization: "Monetizáció",
           timeliness: "Időszerűség",
         },
+        emptyDimension: "Ehhez a dimenzióhoz nincs tagelve forrás",
       },
       decision: {
         positiveDrivers: {

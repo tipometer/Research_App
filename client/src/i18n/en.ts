@@ -110,6 +110,7 @@ export const en = {
           monetization: "Monetization",
           timeliness: "Timeliness",
         },
+        emptyDimension: "No sources tagged for this dimension yet",
       },
       decision: {
         positiveDrivers: {

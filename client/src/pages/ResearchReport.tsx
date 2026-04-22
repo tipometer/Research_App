@@ -1,5 +1,6 @@
 import { AppLayout } from "@/components/AppLayout";
 import { DecisionContextBlock } from "@/components/decision/DecisionContextBlock";
+import { DimensionChips, type Dimension } from "@/components/decision/DimensionChips";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +42,17 @@ import {
 import { Streamdown } from "streamdown";
 import { cn } from "@/lib/utils";
 
+
+function getFilteredSources<S extends { url: string | null }>(
+  allSources: S[],
+  buckets: Record<string, Array<{ sourceUrl: string | null }>> | undefined,
+  selected: Dimension,
+): S[] {
+  if (selected === "all" || !buckets) return allSources;
+  const bucketed = buckets[selected] ?? [];
+  const urlSet = new Set(bucketed.map((e) => e.sourceUrl).filter((u): u is string => Boolean(u)));
+  return allSources.filter((s) => s.url && urlSet.has(s.url));
+}
 
 const SOURCE_TYPE_CONFIG = {
   academic: { icon: GraduationCap, label: "academic", class: "source-academic" },
@@ -135,6 +147,20 @@ export default function ResearchReport() {
   const dbQuestions: DbQuestion[] = Array.isArray(surveyData?.questions)
     ? (surveyData.questions as DbQuestion[])
     : [];
+
+  // ── Tab + dimension filter state ──────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<string>("report");
+  const [selectedDimension, setSelectedDimension] = useState<Dimension>("all");
+
+  // ── Evidence-by-dimension query (lazy: only runs when Sources tab is active) ─
+  const evidenceBucketsQuery = trpc.validation.getEvidenceByDimension.useQuery(
+    { researchId: id },
+    {
+      enabled: !Number.isNaN(id) && id > 0 && activeTab === "sources",
+      retry: false,
+      refetchOnWindowFocus: false,
+    },
+  );
 
   // Local editable copy (only used when survey is active and questions are loaded)
   const [localQuestions, setLocalQuestions] = useState<LocalQuestion[]>([]);
@@ -303,7 +329,7 @@ export default function ResearchReport() {
         {/* Decision context panels */}
         <DecisionContextBlock researchId={id} />
 
-        <Tabs defaultValue="report">
+        <Tabs value={activeTab} onValueChange={setActiveTab} defaultValue="report">
           <TabsList className="mb-6">
             <TabsTrigger value="report">Riport</TabsTrigger>
             <TabsTrigger value="sources">{t("report.sources.title")} ({report.sources.length})</TabsTrigger>
@@ -326,43 +352,65 @@ export default function ResearchReport() {
 
           {/* Sources tab */}
           <TabsContent value="sources">
-            <div className="space-y-3">
-              {report.sources.map((source) => {
-                const cfg = SOURCE_TYPE_CONFIG[source.type as keyof typeof SOURCE_TYPE_CONFIG];
+            {/* Chips row — only render if evidence query didn't error */}
+            {!evidenceBucketsQuery.isError && (
+              <DimensionChips
+                selected={selectedDimension}
+                onSelect={setSelectedDimension}
+                disabled={evidenceBucketsQuery.isLoading}
+              />
+            )}
+
+            {/* Filtered source list */}
+            {(() => {
+              const filtered = getFilteredSources(report.sources, evidenceBucketsQuery.data, selectedDimension);
+              if (filtered.length === 0 && selectedDimension !== "all") {
                 return (
-                  <Card key={source.id}>
-                    <CardContent className="pt-4 pb-4">
-                      <div className="flex items-start gap-3">
-                        <div className={cn("p-2 rounded-lg flex-shrink-0", cfg.class)}>
-                          <cfg.icon className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", cfg.class)}>
-                              {t(`report.sourceTypes.${cfg.label}`)}
-                            </span>
-                            <span className={cn("flex items-center gap-1 text-xs", source.publishedAt ? "text-muted-foreground" : "text-muted-foreground italic")}>
-                              <Calendar className="w-3 h-3" />
-                              {source.publishedAt ?? t("report.unknownDate")}
-                            </span>
-                          </div>
-                          <a
-                            href={source.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-medium text-sm hover:text-primary transition-colors flex items-center gap-1"
-                          >
-                            {source.title}
-                            <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                          </a>
-                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{source.snippet}</p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <p className="text-sm text-muted-foreground italic py-4">
+                    {t("report.sources.emptyDimension")}
+                  </p>
                 );
-              })}
-            </div>
+              }
+              return (
+                <div className="space-y-3">
+                  {filtered.map((source) => {
+                    const cfg = SOURCE_TYPE_CONFIG[source.type as keyof typeof SOURCE_TYPE_CONFIG];
+                    return (
+                      <Card key={source.id}>
+                        <CardContent className="pt-4 pb-4">
+                          <div className="flex items-start gap-3">
+                            <div className={cn("p-2 rounded-lg flex-shrink-0", cfg.class)}>
+                              <cfg.icon className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", cfg.class)}>
+                                  {t(`report.sourceTypes.${cfg.label}`)}
+                                </span>
+                                <span className={cn("flex items-center gap-1 text-xs", source.publishedAt ? "text-muted-foreground" : "text-muted-foreground italic")}>
+                                  <Calendar className="w-3 h-3" />
+                                  {source.publishedAt ?? t("report.unknownDate")}
+                                </span>
+                              </div>
+                              <a
+                                href={source.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium text-sm hover:text-primary transition-colors flex items-center gap-1"
+                              >
+                                {source.title}
+                                <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                              </a>
+                              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{source.snippet}</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </TabsContent>
 
           {/* Polling tab */}
