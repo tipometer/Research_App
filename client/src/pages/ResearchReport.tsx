@@ -1,4 +1,5 @@
 import { AppLayout } from "@/components/AppLayout";
+import { DecisionContextBlock } from "@/components/decision/DecisionContextBlock";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -298,6 +299,9 @@ export default function ResearchReport() {
             {t("report.export.share")}
           </Button>
         </div>
+
+        {/* Decision context panels */}
+        <DecisionContextBlock researchId={id} />
 
         <Tabs defaultValue="report">
           <TabsList className="mb-6">
