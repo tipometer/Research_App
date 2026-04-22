@@ -1,4 +1,6 @@
 import { AppLayout } from "@/components/AppLayout";
+import { DecisionContextBlock } from "@/components/decision/DecisionContextBlock";
+import { DimensionChips, type Dimension } from "@/components/decision/DimensionChips";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -135,6 +137,20 @@ export default function ResearchReport() {
     ? (surveyData.questions as DbQuestion[])
     : [];
 
+  // ── Tab + dimension filter state ──────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<string>("report");
+  const [selectedDimension, setSelectedDimension] = useState<Dimension>("all");
+
+  // ── Evidence-by-dimension query (lazy: only runs when Sources tab is active) ─
+  const evidenceBucketsQuery = trpc.validation.getEvidenceByDimension.useQuery(
+    { researchId: id },
+    {
+      enabled: !Number.isNaN(id) && id > 0 && activeTab === "sources",
+      retry: false,
+      refetchOnWindowFocus: false,
+    },
+  );
+
   // Local editable copy (only used when survey is active and questions are loaded)
   const [localQuestions, setLocalQuestions] = useState<LocalQuestion[]>([]);
   const [questionsInitialised, setQuestionsInitialised] = useState(false);
@@ -253,19 +269,21 @@ export default function ResearchReport() {
                 <p className="text-xs text-muted-foreground">/ 10 összesített pontszám</p>
               </div>
               {/* Score breakdown */}
-              <div className="w-full space-y-2">
+              <div className="w-full space-y-3">
                 {Object.entries(report.scores).map(([key, val]) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground w-28 flex-shrink-0">
-                      {t(`report.radarAxes.${key.replace(/([A-Z])/g, (m) => m.toLowerCase())}`)}
-                    </span>
-                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div key={key} className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">
+                        {t(`report.radarAxes.${key.replace(/([A-Z])/g, (m) => m.toLowerCase())}`)}
+                      </span>
+                      <span className="text-xs font-bold">{val}</span>
+                    </div>
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                       <div
                         className="h-full bg-primary rounded-full"
                         style={{ width: `${val * 10}%` }}
                       />
                     </div>
-                    <span className="text-xs font-bold w-4 text-right">{val}</span>
                   </div>
                 ))}
               </div>
@@ -299,10 +317,13 @@ export default function ResearchReport() {
           </Button>
         </div>
 
-        <Tabs defaultValue="report">
+        {/* Decision context panels */}
+        <DecisionContextBlock researchId={id} />
+
+        <Tabs value={activeTab} onValueChange={setActiveTab} defaultValue="report">
           <TabsList className="mb-6">
             <TabsTrigger value="report">Riport</TabsTrigger>
-            <TabsTrigger value="sources">{t("report.sources")} ({report.sources.length})</TabsTrigger>
+            <TabsTrigger value="sources">{t("report.sources.title")} ({report.sources.length})</TabsTrigger>
             <TabsTrigger value="polling" className="gap-1.5">
               <Users className="w-3.5 h-3.5" />
               {t("report.polling.tabLabel")}
@@ -322,43 +343,93 @@ export default function ResearchReport() {
 
           {/* Sources tab */}
           <TabsContent value="sources">
-            <div className="space-y-3">
-              {report.sources.map((source) => {
-                const cfg = SOURCE_TYPE_CONFIG[source.type as keyof typeof SOURCE_TYPE_CONFIG];
-                return (
-                  <Card key={source.id}>
-                    <CardContent className="pt-4 pb-4">
-                      <div className="flex items-start gap-3">
-                        <div className={cn("p-2 rounded-lg flex-shrink-0", cfg.class)}>
-                          <cfg.icon className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", cfg.class)}>
-                              {t(`report.sourceTypes.${cfg.label}`)}
-                            </span>
-                            <span className={cn("flex items-center gap-1 text-xs", source.publishedAt ? "text-muted-foreground" : "text-muted-foreground italic")}>
-                              <Calendar className="w-3 h-3" />
-                              {source.publishedAt ?? t("report.unknownDate")}
-                            </span>
+            {/* Chips row — only render if evidence query didn't error */}
+            {!evidenceBucketsQuery.isError && (
+              <DimensionChips
+                selected={selectedDimension}
+                onSelect={setSelectedDimension}
+                disabled={evidenceBucketsQuery.isLoading}
+              />
+            )}
+
+            {/* Source list — branched on selected dimension */}
+            {selectedDimension === "all" ? (
+              <div className="space-y-3">
+                {report.sources.map((source) => {
+                  const cfg = SOURCE_TYPE_CONFIG[source.type as keyof typeof SOURCE_TYPE_CONFIG];
+                  return (
+                    <Card key={source.id}>
+                      <CardContent className="pt-4 pb-4">
+                        <div className="flex items-start gap-3">
+                          <div className={cn("p-2 rounded-lg flex-shrink-0", cfg.class)}>
+                            <cfg.icon className="w-4 h-4" />
                           </div>
-                          <a
-                            href={source.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-medium text-sm hover:text-primary transition-colors flex items-center gap-1"
-                          >
-                            {source.title}
-                            <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                          </a>
-                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{source.snippet}</p>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", cfg.class)}>
+                                {t(`report.sourceTypes.${cfg.label}`)}
+                              </span>
+                              <span className={cn("flex items-center gap-1 text-xs", source.publishedAt ? "text-muted-foreground" : "text-muted-foreground italic")}>
+                                <Calendar className="w-3 h-3" />
+                                {source.publishedAt ?? t("report.unknownDate")}
+                              </span>
+                            </div>
+                            <a
+                              href={source.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-sm hover:text-primary transition-colors flex items-center gap-1"
+                            >
+                              {source.title}
+                              <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                            </a>
+                            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{source.snippet}</p>
+                          </div>
                         </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            ) : (
+              (() => {
+                const claims = evidenceBucketsQuery.data?.[selectedDimension] ?? [];
+                if (claims.length === 0) {
+                  return (
+                    <p className="text-sm text-muted-foreground italic py-4">
+                      {t("report.sources.emptyDimension")}
+                    </p>
+                  );
+                }
+                return (
+                  <div className="space-y-3">
+                    {claims.map((claim) => {
+                      const stanceClass =
+                        claim.stance === "supports"
+                          ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                          : claim.stance === "weakens"
+                          ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                          : "bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-300";
+                      return (
+                        <Card key={claim.id}>
+                          <CardContent className="pt-4 pb-4">
+                            <div className="flex items-start justify-between gap-3 mb-2">
+                              <Badge variant="outline" className={cn("capitalize", stanceClass)}>
+                                {claim.stance}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {Math.round(Number(claim.confidence ?? 0) * 100)}% confidence
+                              </span>
+                            </div>
+                            <p className="text-sm">{claim.claim}</p>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
                 );
-              })}
-            </div>
+              })()
+            )}
           </TabsContent>
 
           {/* Polling tab */}

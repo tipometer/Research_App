@@ -106,7 +106,36 @@ export const hu = {
         monetization: "Monetizáció",
         timeliness: "Időszerűség",
       },
-      sources: "Forráskönyvtár",
+      sources: {
+        title: "Forráskönyvtár",
+        dimensionChips: {
+          all: "Mind",
+          marketSize: "Piaci méret",
+          competition: "Verseny",
+          feasibility: "Megvalósíthatóság",
+          monetization: "Monetizáció",
+          timeliness: "Időszerűség",
+        },
+        emptyDimension: "Ehhez a dimenzióhoz nincs tagelve forrás",
+      },
+      decision: {
+        positiveDrivers: {
+          title: "Mi húzta fel a score-t",
+          empty: "Nincs azonosított pozitív driver",
+        },
+        negativeDrivers: {
+          title: "Mi húzta le",
+          empty: "Nincs azonosított negatív driver",
+        },
+        missingEvidence: {
+          title: "Mi hiányzik még",
+          empty: "Nincs azonosított bizonyítékhiány",
+        },
+        nextActions: {
+          title: "Következő lépések",
+          empty: "Nincs javasolt akció",
+        },
+      },
       sourceTypes: {
         academic: "Tudományos",
         industry: "Iparági",
