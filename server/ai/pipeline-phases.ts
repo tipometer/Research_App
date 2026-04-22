@@ -18,6 +18,39 @@ import {
 
 const RETRY_RESERVED_MS = 30_000;
 
+export const SYNTHESIS_RUBRIC_BLOCK = `
+## Scoring rubric (0-10 per dimension)
+
+Use the following anchors to score consistently. Do NOT default to 10 — calibrate against the evidence actually gathered in phases 1-3.
+
+**market_size**
+- 9-10: $1B+ TAM triangulated with ≥2 independent market studies and clear ICP count
+- 5-6: plausible niche, numbers are hand-wavy or LLM-estimated without sources
+- 1-2: no market evidence — only anecdote or speculation
+
+**competition**
+- 9-10: ≤3 direct competitors, all with clear weaknesses documented; open pricing bands
+- 5-6: crowded but differentiable; 5-15 competitors, some with moats
+- 1-2: dominant incumbents with deep moats; no clear differentiation angle
+
+**feasibility**
+- 9-10: a small team can ship v1 in ≤3 months with off-the-shelf tech; no novel research
+- 5-6: real engineering challenges but known patterns (ML, integrations, scale)
+- 1-2: requires novel research, regulatory approval, or hardware that doesn't exist
+
+**monetization**
+- 9-10: target users already pay for comparable tools at clear price points
+- 5-6: willingness-to-pay plausible but requires signaling or primer validation
+- 1-2: target users historically don't pay; free/ads-only models dominant
+
+**timeliness**
+- 9-10: macro trend demonstrably rising (adoption, regulation, tech unlock) in last 12 months
+- 5-6: long-running stable demand; neither rising nor declining sharply
+- 1-2: declining trend or counter-cyclical risk
+
+Scores below 4 in any single dimension must be explicitly justified in the rationale.
+`;
+
 /**
  * Google Search grounding tool — the v3 provider API replaced
  * `providerOptions.google.useSearchGrounding` with an explicit tool.
@@ -441,7 +474,7 @@ ADDITIONAL STRUCTURED FIELDS (Validation Workspace — required):
   - "dimensions": array of 1-3 from ["market_size","competition","feasibility","monetization","timeliness"]
   - "stance": "supports" | "weakens" | "neutral" (how the claim affects the GO/KILL verdict)
   - "confidence": number between 0 and 1 (your confidence the claim is true). Use 0.9+ only for claims directly backed by cited web sources. Use 0.5-0.7 for reasoned inferences. Use below 0.5 sparingly.
-
+${SYNTHESIS_RUBRIC_BLOCK}
 Keep these additional fields GROUNDED in the findings provided above — do not invent facts.`,
     },
   ];

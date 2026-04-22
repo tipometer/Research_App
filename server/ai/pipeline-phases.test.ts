@@ -15,7 +15,7 @@ vi.mock("ai", async (orig) => {
   };
 });
 
-import { runPhase1, runPhase2, runPhase3, runPhase4Stream, runPolling, runBrainstorm } from "./pipeline-phases";
+import { runPhase1, runPhase2, runPhase3, runPhase4Stream, runPolling, runBrainstorm, SYNTHESIS_RUBRIC_BLOCK } from "./pipeline-phases";
 import { resolvePhaseWithFallback } from "./router";
 import { generateText, streamText } from "ai";
 
@@ -555,5 +555,22 @@ describe("runBrainstorm with fallback", () => {
     const result = await runBrainstorm({ context: "SaaS tools" }, { onFallback });
     expect(result.ideas).toHaveLength(10);
     expect(onFallback).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SYNTHESIS_RUBRIC_BLOCK (P2 scoring rubric)
+// ---------------------------------------------------------------------------
+
+describe("SYNTHESIS_RUBRIC_BLOCK (P2 scoring rubric)", () => {
+  it("includes all 5 dimensions with 3 anchor points each", () => {
+    const dimensions = ["market_size", "competition", "feasibility", "monetization", "timeliness"];
+    for (const dim of dimensions) {
+      expect(SYNTHESIS_RUBRIC_BLOCK).toContain(dim);
+    }
+    // Each dimension has 3 anchors labelled 9-10, 5-6, 1-2
+    expect((SYNTHESIS_RUBRIC_BLOCK.match(/9-10:/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect((SYNTHESIS_RUBRIC_BLOCK.match(/5-6:/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect((SYNTHESIS_RUBRIC_BLOCK.match(/1-2:/g) ?? []).length).toBeGreaterThanOrEqual(5);
   });
 });
