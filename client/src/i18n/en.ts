@@ -100,7 +100,35 @@ export const en = {
         monetization: "Monetization",
         timeliness: "Timeliness",
       },
-      sources: "Source Library",
+      sources: {
+        title: "Source Library",
+        dimensionChips: {
+          all: "All",
+          marketSize: "Market size",
+          competition: "Competition",
+          feasibility: "Feasibility",
+          monetization: "Monetization",
+          timeliness: "Timeliness",
+        },
+      },
+      decision: {
+        positiveDrivers: {
+          title: "What boosted the score",
+          empty: "No positive drivers identified",
+        },
+        negativeDrivers: {
+          title: "What weakened it",
+          empty: "No negative drivers identified",
+        },
+        missingEvidence: {
+          title: "Missing evidence",
+          empty: "No evidence gaps identified",
+        },
+        nextActions: {
+          title: "Next actions",
+          empty: "No suggested actions",
+        },
+      },
       sourceTypes: {
         academic: "Academic",
         industry: "Industry",

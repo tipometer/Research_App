@@ -302,7 +302,7 @@ export default function ResearchReport() {
         <Tabs defaultValue="report">
           <TabsList className="mb-6">
             <TabsTrigger value="report">Riport</TabsTrigger>
-            <TabsTrigger value="sources">{t("report.sources")} ({report.sources.length})</TabsTrigger>
+            <TabsTrigger value="sources">{t("report.sources.title")} ({report.sources.length})</TabsTrigger>
             <TabsTrigger value="polling" className="gap-1.5">
               <Users className="w-3.5 h-3.5" />
               {t("report.polling.tabLabel")}
